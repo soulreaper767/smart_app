@@ -154,6 +154,7 @@ def setup():
 	run_step(add_home_workspace_shortcut, "home workspace shortcut")
 	run_step(grant_inquiry_manager_workflow_access, "inquiry manager workflow access")
 	run_step(setup_module_profile, "restricted module profile")
+	run_step(setup_quotation_integration, "quotation get-items-from integration")
 
 	frappe.db.commit()
 	frappe.clear_cache()
@@ -193,11 +194,17 @@ def ensure_roles():
 
 def grant_master_data_access():
 	"""None of Inquiry Officer / Marketer / Inquiry Manager have any
-	permission on core Customer/Item/Employee out of the box, which would
-	otherwise make the `inquiry_source`, `items.item` and `marketer` Link
-	fields unusable (Frappe blocks Link search/select without at least
-	`select` on the target doctype). Grant only what each role actually
-	needs, on principle of least privilege:
+	permission on the core doctypes Inquiry links to out of the box, which
+	makes those Link fields unusable (Frappe blocks Link search/select
+	without at least `select` on the target doctype, and some client-side
+	lookups need full `read`). Audited against every Link field on Inquiry:
+	inquiry_source (Customer), items.item (Item), marketer (Employee),
+	inquiry_officer (User), company (Company), currency (Currency),
+	referred_party_country (Country), plus contact_person/customer_address
+	(Contact/Address, Permission Level 1 — Inquiry Manager only, matching
+	who can even see those fields on the form).
+
+	Grants are least-privilege per role:
 	  - Customer: select+read+create so a Customer can be found or quick-
 	    created right from the Inquiry form (Inquiry Manager also gets write,
 	    for corrections).
@@ -206,20 +213,39 @@ def grant_master_data_access():
 	    to be able to add a new Item inline, not just select existing ones.
 	  - Employee: select only, and only enough to power the Marketer link
 	    field's search dropdown. No read/write, since Employee records carry
-	    sensitive HR data unrelated to this app. Creating a *new* Marketer is
-	    deliberately NOT done via raw Employee permissions — see
-	    `create_marketer` in inquiry.py, which is restricted to Inquiry
-	    Manager and only ever assigns the fixed "Marketer" role, so this
-	    doesn't become a path to escalate to arbitrary roles.
+	    sensitive HR data unrelated to this app — the client-side "auto-fill
+	    my own Marketer record" convenience goes through a whitelisted
+	    server method instead of a direct read-permission-gated list call
+	    (see get_my_marketer_employee in inquiry.py). Creating a *new*
+	    Marketer is deliberately NOT done via raw Employee permissions either
+	    — see `create_marketer`, restricted to Inquiry Manager and always
+	    assigning exactly the "Marketer" role, so this doesn't become a path
+	    to escalate to arbitrary roles.
+	  - Company / Currency / Country / User: select+read for everyone who
+	    can create an Inquiry — these are plain reference data, no
+	    create/write needed.
+	  - Contact / Address: select+read for Inquiry Manager only, matching
+	    the Permission Level 1 restriction that already hides those fields
+	    from Inquiry Officer/Marketer on the form itself.
 	"""
 	for role in ("Inquiry Officer", "Marketer"):
 		_grant_custom_docperm("Customer", role, select=1, read=1, create=1)
 		_grant_custom_docperm("Item", role, select=1, read=1, create=1)
 		_grant_custom_docperm("Employee", role, select=1)
+		_grant_custom_docperm("Company", role, select=1, read=1)
+		_grant_custom_docperm("Currency", role, select=1, read=1)
+		_grant_custom_docperm("Country", role, select=1, read=1)
+		_grant_custom_docperm("User", role, select=1, read=1)
 
 	_grant_custom_docperm("Customer", "Inquiry Manager", select=1, read=1, write=1, create=1)
 	_grant_custom_docperm("Item", "Inquiry Manager", select=1, read=1, create=1)
 	_grant_custom_docperm("Employee", "Inquiry Manager", select=1)
+	_grant_custom_docperm("Company", "Inquiry Manager", select=1, read=1)
+	_grant_custom_docperm("Currency", "Inquiry Manager", select=1, read=1)
+	_grant_custom_docperm("Country", "Inquiry Manager", select=1, read=1)
+	_grant_custom_docperm("User", "Inquiry Manager", select=1, read=1)
+	_grant_custom_docperm("Contact", "Inquiry Manager", select=1, read=1)
+	_grant_custom_docperm("Address", "Inquiry Manager", select=1, read=1)
 
 
 # ---------------------------------------------------------------------------
@@ -547,6 +573,82 @@ def _create_query_report(name, query):
 	for role in ("Inquiry Manager", "Inquiry Officer", "Marketer", "System Manager"):
 		report.append("roles", {"role": role})
 	report.insert(ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
+# Quotation integration: "Get Items From" > Inquiry (only Inquiries with
+# status "Quotation" are offered), plus a traceability field back to it.
+# Quotation is a core ERPNext doctype, so this is done non-invasively via a
+# Custom Field and a Client Script rather than editing ERPNext's own files.
+# ---------------------------------------------------------------------------
+
+QUOTATION_GET_ITEMS_FROM_INQUIRY_JS = """
+frappe.ui.form.on("Quotation", {
+	refresh: function (frm) {
+		if (frm.doc.docstatus === 0 && frappe.model.can_read("Inquiry")) {
+			frm.add_custom_button(
+				__("Inquiry"),
+				function () {
+					erpnext.utils.map_current_doc({
+						method: "smart_app.smart_app.doctype.inquiry.inquiry.make_quotation",
+						source_doctype: "Inquiry",
+						target: frm,
+						setters: [
+							{
+								label: "Customer",
+								fieldname: "inquiry_source",
+								fieldtype: "Link",
+								options: "Customer",
+								default: frm.doc.party_name || undefined,
+							},
+						],
+						get_query_filters: {
+							inquiry_status: "Quotation",
+							company: frm.doc.company,
+						},
+					});
+				},
+				__("Get Items From"),
+				"btn-default"
+			);
+		}
+	},
+});
+""".strip()
+
+
+def setup_quotation_integration():
+	if not frappe.db.exists("DocType", "Quotation"):
+		return
+
+	if not frappe.db.exists("Custom Field", "Quotation-inquiry"):
+		frappe.get_doc(
+			{
+				"doctype": "Custom Field",
+				"dt": "Quotation",
+				"fieldname": "inquiry",
+				"label": "Inquiry",
+				"fieldtype": "Link",
+				"options": "Inquiry",
+				"insert_after": "party_name",
+				"allow_on_submit": 1,
+			}
+		).insert(ignore_permissions=True)
+
+	if frappe.db.exists("Client Script", "Inquiry - Get Items From (Quotation)"):
+		script = frappe.get_doc("Client Script", "Inquiry - Get Items From (Quotation)")
+	else:
+		script = frappe.new_doc("Client Script")
+		script.name = "Inquiry - Get Items From (Quotation)"
+		script.dt = "Quotation"
+		script.view = "Form"
+
+	script.script = QUOTATION_GET_ITEMS_FROM_INQUIRY_JS
+	script.enabled = 1
+	if script.is_new():
+		script.insert(ignore_permissions=True)
+	else:
+		script.save(ignore_permissions=True)
 
 
 # ---------------------------------------------------------------------------

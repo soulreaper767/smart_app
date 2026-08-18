@@ -78,19 +78,23 @@ be layered on in a later phase, once the base Inquiry flow is confirmed.
   one of those three roles, via a `validate` hook on User — you never assign
   it by hand.
 
-### Customer / Item / Employee access
+### Access to every doctype Inquiry links to
 
-None of the three roles have any permission on core **Customer**, **Item** or
-**Employee** by default, which would otherwise make the `inquiry_source`,
-`items.item` and `marketer` fields unusable (Frappe requires at least
-`select` on a doctype to search/pick it in a Link field). `install.py` grants
-exactly what's needed, least-privilege:
+None of the three roles have any permission on the core doctypes Inquiry
+links to by default — Customer, Item, Employee, Company, Currency, Country,
+User, Contact, Address — which would otherwise make those Link fields
+unusable (Frappe requires at least `select` on a doctype to search/pick it
+in a Link field, and some client-side lookups need full `read`).
+`grant_master_data_access` in `install.py` grants exactly what's needed,
+least-privilege:
 
 | Doctype | Inquiry Officer / Marketer | Inquiry Manager |
 |---|---|---|
 | Customer | select, read, create | select, read, write, create |
 | Item | select, read, create (a "New Product Development" Inquiry is often about an item that doesn't exist yet) | select, read, create |
 | Employee | select only (just enough to search the Marketer field — no read/write, since Employee records carry unrelated HR data) | select only |
+| Company, Currency, Country, User | select, read | select, read |
+| Contact, Address | — (matches the Permission Level 1 restriction that already hides these fields on the form) | select, read |
 
 Creating a **new Marketer** is *not* done by widening Employee permissions —
 that would mean touching sensitive HR fields. Instead there's a "Create" →
@@ -99,7 +103,11 @@ System Manager only) that calls the whitelisted
 `smart_app.smart_app.doctype.inquiry.inquiry.create_marketer(full_name,
 email)`. It always assigns exactly the **Marketer** role — never anything
 caller-supplied — so it can't become a path to escalate to arbitrary roles
-even though it runs with `ignore_permissions=True` internally.
+even though it runs with `ignore_permissions=True` internally. Similarly,
+the "auto-fill my Marketer record" convenience on a new Inquiry goes through
+the whitelisted `get_my_marketer_employee` rather than a plain
+`frappe.db.get_list` client call, since that requires full `read` on
+Employee where the narrower `select` (above) doesn't.
 
 ### Focused sidebar (hiding other workspaces)
 
@@ -147,6 +155,24 @@ The **Smart App** workspace ships with:
   ships with, organised into **Inquiry** (the Inquiry doctype itself),
   **Masters** (all four master lists), and **Reports** (both Query
   Reports) cards.
+
+## Quotation integration
+
+Once an Inquiry's status is **Quotation**, it becomes selectable from the
+core **Quotation** form's own "Get Items From" dropdown — click **Get Items
+From → Inquiry**, and only Inquiries currently in the Quotation status are
+offered (via `get_query_filters`), matching how ERPNext already does this
+for Opportunity → Quotation.
+
+This is done without touching any ERPNext source file: `setup_quotation_
+integration` in `install.py` adds a **Client Script** on the Quotation
+doctype (the button + `erpnext.utils.map_current_doc` call, mirroring
+ERPNext's own Opportunity button exactly) and a **Custom Field**
+`inquiry` (Link → Inquiry) on Quotation for traceability back to the
+source. The server-side mapping — `make_quotation` in `inquiry.py` — pulls
+the Customer, Company, Currency and every Inquiry Item (by Item and Qty)
+into the new Quotation, mirroring
+`erpnext.crm.doctype.opportunity.opportunity.make_quotation`.
 
 ## Installation
 

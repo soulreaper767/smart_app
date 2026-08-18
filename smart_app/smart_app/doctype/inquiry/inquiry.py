@@ -4,6 +4,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.model.mapper import get_mapped_doc
 from frappe.contacts.doctype.contact.contact import get_default_contact
 from frappe.contacts.doctype.address.address import get_default_address
 from frappe.utils import validate_email_address
@@ -70,6 +71,18 @@ class Inquiry(Document):
 
 def get_employee_for_user(user):
 	return frappe.db.get_value("Employee", {"user_id": user, "status": "Active"}, "name")
+
+
+@frappe.whitelist()
+def get_my_marketer_employee():
+	"""Used by inquiry.js to auto-fill the Marketer field for the current
+	user on a new Inquiry. Deliberately a narrow whitelisted lookup rather
+	than a plain frappe.db.get_list client call, since Marketer only holds
+	`select` (not `read`) on Employee — see grant_master_data_access in
+	install.py for why."""
+	if "Marketer" not in frappe.get_roles(frappe.session.user):
+		return None
+	return get_employee_for_user(frappe.session.user)
 
 
 @frappe.whitelist()
@@ -220,3 +233,57 @@ def create_marketer(full_name, email):
 
 	frappe.msgprint(_("Marketer {0} is ready to use.").format(employee_name))
 	return employee_name
+
+
+@frappe.whitelist()
+def make_quotation(source_name, target_doc=None):
+	"""Mirrors erpnext.crm.doctype.opportunity.opportunity.make_quotation --
+	called from the "Get Items From" > "Inquiry" button added to the core
+	Quotation form via a Client Script (see setup_quotation_integration in
+	install.py). Only Inquiries with inquiry_status "Quotation" are offered
+	as a source, via that button's get_query_filters."""
+
+	def set_missing_values(source, target):
+		from erpnext.setup.utils import get_exchange_rate
+
+		quotation = frappe.get_doc(target)
+		quotation.quotation_to = "Customer"
+		quotation.party_name = source.inquiry_source
+
+		company_currency = frappe.get_cached_value("Company", quotation.company, "default_currency")
+		if quotation.currency and quotation.currency != company_currency:
+			quotation.conversion_rate = get_exchange_rate(
+				quotation.currency, company_currency, quotation.transaction_date, args="for_selling"
+			)
+
+		quotation.run_method("set_missing_values")
+		quotation.run_method("calculate_taxes_and_totals")
+
+	def update_item(source_row, target_row, source_parent):
+		target_row.item_code = source_row.item
+		target_row.qty = source_row.qty
+
+	doclist = get_mapped_doc(
+		"Inquiry",
+		source_name,
+		{
+			"Inquiry": {
+				"doctype": "Quotation",
+				"field_map": {
+					"company": "company",
+					"currency": "currency",
+					"name": "inquiry",
+				},
+			},
+			"Inquiry Item": {
+				"doctype": "Quotation Item",
+				"field_map": {"item": "item_code", "qty": "qty"},
+				"postprocess": update_item,
+				"add_if_empty": True,
+			},
+		},
+		target_doc,
+		set_missing_values,
+	)
+
+	return doclist

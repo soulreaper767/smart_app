@@ -10,16 +10,14 @@ frappe.ui.form.on("Inquiry", {
 
 	onload: function (frm) {
 		if (frm.is_new() && !frm.doc.marketer && frappe.user_roles.includes("Marketer")) {
-			frappe.db
-				.get_list("Employee", {
-					filters: { user_id: frappe.session.user, status: "Active" },
-					limit: 1,
-				})
-				.then((records) => {
-					if (records && records.length) {
-						frm.set_value("marketer", records[0].name);
+			frappe.call({
+				method: "smart_app.smart_app.doctype.inquiry.inquiry.get_my_marketer_employee",
+				callback: function (r) {
+					if (r.message) {
+						frm.set_value("marketer", r.message);
 					}
-				});
+				},
+			});
 		}
 
 		if (frm.is_new() && !frm.doc.company) {
