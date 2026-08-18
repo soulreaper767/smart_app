@@ -174,16 +174,31 @@ def create_customer_from_referred_party(inquiry_name):
 	return customer.name
 
 
+CREATE_MARKETER_ROLES = {
+	"Inquiry Manager",
+	"Inquiry Officer",
+	"Marketer",
+	"Inquiry User",
+	"System Manager",
+}
+
+
 @frappe.whitelist()
 def create_marketer(full_name, email):
 	"""Onboard a brand-new Marketer (User + Employee) from the Inquiry form.
 
-	Deliberately restricted to Inquiry Manager / System Manager, and always
-	assigns exactly the "Marketer" role (never anything caller-supplied) so
-	this can't be used as a path to grant arbitrary roles even though it runs
-	with ignore_permissions=True to create the User/Employee records."""
-	if not ({"Inquiry Manager", "System Manager"} & set(frappe.get_roles(frappe.session.user))):
-		frappe.throw(_("Only an Inquiry Manager can create a new Marketer."), frappe.PermissionError)
+	Open to anyone who works with Inquiries (Inquiry Officer/Marketer/Inquiry
+	Manager, via the umbrella Inquiry User role, plus System Manager) rather
+	than Inquiry Manager only -- frontline staff are usually the ones who
+	notice a new marketer needs onboarding. This stays safe to open up
+	because it always assigns exactly the "Marketer" role (never anything
+	caller-supplied), so it can't be used as a path to grant arbitrary roles
+	even though it runs with ignore_permissions=True to create the
+	User/Employee records."""
+	if not (CREATE_MARKETER_ROLES & set(frappe.get_roles(frappe.session.user))):
+		frappe.throw(
+			_("You do not have permission to create a new Marketer."), frappe.PermissionError
+		)
 
 	full_name = (full_name or "").strip()
 	email = (email or "").strip()

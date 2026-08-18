@@ -98,12 +98,15 @@ least-privilege:
 
 Creating a **new Marketer** is *not* done by widening Employee permissions —
 that would mean touching sensitive HR fields. Instead there's a "Create" →
-"New Marketer" button on the Inquiry form (visible to Inquiry Manager /
-System Manager only) that calls the whitelisted
+"New Marketer" button on the Inquiry form, open to anyone who works with
+Inquiries (Inquiry Officer / Marketer / Inquiry Manager / System Manager —
+frontline staff are usually the ones who notice a new marketer needs
+onboarding), that calls the whitelisted
 `smart_app.smart_app.doctype.inquiry.inquiry.create_marketer(full_name,
-email)`. It always assigns exactly the **Marketer** role — never anything
-caller-supplied — so it can't become a path to escalate to arbitrary roles
-even though it runs with `ignore_permissions=True` internally. Similarly,
+email)`. Opening this up beyond Inquiry Manager stays safe because it always
+assigns exactly the **Marketer** role — never anything caller-supplied — so
+it can't become a path to escalate to arbitrary roles even though it runs
+with `ignore_permissions=True` internally. Similarly,
 the "auto-fill my Marketer record" convenience on a new Inquiry goes through
 the whitelisted `get_my_marketer_employee` rather than a plain
 `frappe.db.get_list` client call, since that requires full `read` on

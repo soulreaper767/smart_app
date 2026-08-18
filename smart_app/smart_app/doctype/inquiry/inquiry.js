@@ -45,7 +45,14 @@ frappe.ui.form.on("Inquiry", {
 	},
 
 	show_create_marketer_button: function (frm) {
-		if (frappe.user_roles.includes("Inquiry Manager") || frappe.user_roles.includes("System Manager")) {
+		const roles = frappe.user_roles;
+		const can_create_marketer =
+			roles.includes("Inquiry Manager") ||
+			roles.includes("Inquiry Officer") ||
+			roles.includes("Marketer") ||
+			roles.includes("Inquiry User") ||
+			roles.includes("System Manager");
+		if (can_create_marketer) {
 			frm.add_custom_button(
 				__("New Marketer"),
 				function () {
