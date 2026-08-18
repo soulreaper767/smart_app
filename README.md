@@ -101,20 +101,34 @@ email)`. It always assigns exactly the **Marketer** role — never anything
 caller-supplied — so it can't become a path to escalate to arbitrary roles
 even though it runs with `ignore_permissions=True` internally.
 
-### Focused sidebar (hiding every other workspace)
+### Focused sidebar (hiding other workspaces)
 
-A **Module Profile** named `Inquiry Team` is created on install, blocking
-every module except Smart App. It's auto-assigned to a User (via the same
-`validate` hook on User, in `smart_app.smart_app.utils.sync_module_profile`)
-**only if every role that User holds is Inquiry-related** (Inquiry Manager /
-Inquiry Officer / Marketer / Inquiry User, plus the harmless baseline roles
-every user has like `All`/`Desk User`). A user who *also* holds an unrelated
-role — e.g. someone who is both a Marketer and a Sales User — is left
-completely untouched, so their access to Selling/other workspaces is never
-affected. System Manager is always excluded. If you need a mixed-role user to
-get the focused sidebar too, either broaden `Inquiry Team`'s blocked-module
-list manually, or clear their `module_profile` field yourself — the sync
-logic never overwrites a Module Profile it didn't set itself.
+A **Module Profile** named `Inquiry Team` is created on install and blocks a
+curated list of ERPNext/HRMS/Webshop/Payments *business* modules
+(`BUSINESS_MODULES_TO_HIDE` in `install.py`: Accounts, Buying, Selling,
+Stock, CRM, Support, Projects, Assets, Manufacturing, HR, Payroll, etc). It
+is deliberately a **blocklist, not "everything except Smart App"** — an
+earlier version tried the latter and it hid the **Home** workspace too
+(Home lives in one of Frappe's own foundational modules), leaving affected
+users with no workspace at all. Frappe's own infrastructure modules (Desk,
+Core, Website, Automation, Integrations, ...) are never touched, so an
+unrecognised module — including ones from apps this list doesn't know about
+— defaults to staying **visible**, not hidden. If your site has other
+business modules that should also be hidden, add them to
+`BUSINESS_MODULES_TO_HIDE` and re-run migrate (the block list is rebuilt
+from that constant on every run, so edits self-heal).
+
+The profile is auto-assigned to a User (via the same `validate` hook on
+User, in `smart_app.smart_app.utils.sync_module_profile`) **only if every
+role that User holds is Inquiry-related** (Inquiry Manager / Inquiry Officer
+/ Marketer / Inquiry User, plus the harmless baseline roles every user has
+like `All`/`Desk User`). A user who *also* holds an unrelated role — e.g.
+someone who is both a Marketer and a Sales User — is left completely
+untouched, so their access to Selling/other workspaces is never affected.
+System Manager is always excluded. If you need a mixed-role user to get the
+focused sidebar too, either broaden the module list, or clear their
+`module_profile` field yourself — the sync logic never overwrites a Module
+Profile it didn't set itself.
 
 ## Workspace shortcuts
 

@@ -40,6 +40,40 @@ WORKFLOW_ACTIONS = [
 
 MODULE_PROFILE_NAME = "Inquiry Team"
 
+# Only these known ERPNext/HRMS/Webshop/Payments *business* modules are
+# hidden for the restricted sidebar. Deliberately a blocklist, not "every
+# module except Smart App" — this app has no way to know every module a
+# given site has (including ones from apps it's never heard of), and a
+# blocklist means an unrecognised module defaults to STAYING VISIBLE rather
+# than being silently hidden. Frappe's own foundational modules (Desk, Core,
+# Website, Automation, Integrations, etc. — which is where the Home
+# workspace itself lives) are intentionally never in this list.
+BUSINESS_MODULES_TO_HIDE = [
+	"Accounts",
+	"Buying",
+	"Selling",
+	"Stock",
+	"CRM",
+	"Support",
+	"Projects",
+	"Assets",
+	"Manufacturing",
+	"Quality Management",
+	"Maintenance",
+	"Subcontracting",
+	"Bulk Transaction",
+	"Loan Management",
+	"Regional",
+	"Setup",
+	"HR",
+	"Payroll",
+	"Recruitment",
+	"Performance",
+	"Webshop",
+	"E-commerce",
+	"Payments",
+]
+
 SHORTCUTS = [
 	{"label": "New Inquiry", "type": "DocType", "link_to": "Inquiry", "doc_view": "New", "color": "Blue"},
 	{"label": "Inquiry List", "type": "DocType", "link_to": "Inquiry", "doc_view": "List", "color": "Blue"},
@@ -748,13 +782,24 @@ def _grant_custom_docperm(doctype, role, **perms):
 
 
 def setup_module_profile():
-	if frappe.db.exists("Module Profile", MODULE_PROFILE_NAME):
-		return
+	"""Rebuilds the block list every run (not just on first create) so a
+	correction to BUSINESS_MODULES_TO_HIDE self-heals on the next migrate,
+	rather than being stuck with whatever list existed when the profile was
+	first created."""
+	existing_modules = set(frappe.get_all("Module Def", pluck="name"))
+	modules_to_block = sorted(m for m in BUSINESS_MODULES_TO_HIDE if m in existing_modules)
 
-	all_modules = frappe.get_all("Module Def", pluck="name")
-	profile = frappe.new_doc("Module Profile")
-	profile.module_profile_name = MODULE_PROFILE_NAME
-	for module in all_modules:
-		if module != MODULE:
-			profile.append("block_modules", {"module": module})
-	profile.insert(ignore_permissions=True)
+	if frappe.db.exists("Module Profile", MODULE_PROFILE_NAME):
+		profile = frappe.get_doc("Module Profile", MODULE_PROFILE_NAME)
+	else:
+		profile = frappe.new_doc("Module Profile")
+		profile.module_profile_name = MODULE_PROFILE_NAME
+
+	profile.set("block_modules", [])
+	for module in modules_to_block:
+		profile.append("block_modules", {"module": module})
+
+	if profile.is_new():
+		profile.insert(ignore_permissions=True)
+	else:
+		profile.save(ignore_permissions=True)
