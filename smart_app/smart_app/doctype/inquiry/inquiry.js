@@ -21,6 +21,23 @@ frappe.ui.form.on("Inquiry", {
 					}
 				});
 		}
+
+		if (frm.is_new() && !frm.doc.company) {
+			const default_company = frappe.defaults.get_user_default("Company");
+			if (default_company) {
+				frm.set_value("company", default_company);
+			}
+		}
+	},
+
+	company: function (frm) {
+		if (frm.doc.company && !frm.doc.currency) {
+			frappe.db.get_value("Company", frm.doc.company, "default_currency").then((r) => {
+				if (r.message && r.message.default_currency) {
+					frm.set_value("currency", r.message.default_currency);
+				}
+			});
+		}
 	},
 
 	refresh: function (frm) {

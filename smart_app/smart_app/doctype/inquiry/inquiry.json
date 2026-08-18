@@ -93,7 +93,6 @@
    "fieldtype": "Column Break"
   },
   {
-   "default": "eval:frappe.defaults.get_user_default(\"Company\")",
    "fieldname": "company",
    "fieldtype": "Link",
    "label": "Company",
@@ -317,7 +316,6 @@
    "fieldtype": "Column Break"
   },
   {
-   "default": "eval:frappe.defaults.get_global_default(\"currency\")",
    "fieldname": "currency",
    "fieldtype": "Link",
    "label": "Currency",
