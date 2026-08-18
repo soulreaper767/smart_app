@@ -4,6 +4,56 @@
 import frappe
 
 APPLICABLE_FOR = "Inquiry"
+INQUIRY_ROLES = {"Inquiry Officer", "Marketer", "Inquiry Manager"}
+UMBRELLA_ROLE = "Inquiry User"
+MODULE_PROFILE_NAME = "Inquiry Team"
+# Roles that don't count as "this user also needs access elsewhere" when
+# deciding whether to restrict their sidebar to just Smart App.
+NON_RESTRICTIVE_ROLES = {"All", "Guest", "Desk User", "Employee", UMBRELLA_ROLE} | INQUIRY_ROLES
+
+
+def sync_module_profile(doc, method=None):
+	"""User.validate: give users whose roles are *entirely* Inquiry-related a
+	focused sidebar (Smart App only) via a shared Module Profile, hiding every
+	other workspace. Deliberately skipped for System Manager and for anyone
+	who also holds a role outside this app (e.g. Sales User) so their access
+	elsewhere is never touched — and only ever applied/removed if this is the
+	profile we set in the first place, so a manually chosen Module Profile is
+	always left alone."""
+	if not frappe.db.exists("Module Profile", MODULE_PROFILE_NAME):
+		return
+
+	current_roles = {r.role for r in doc.get("roles")}
+	if "System Manager" in current_roles:
+		return
+
+	has_inquiry_role = bool(current_roles & INQUIRY_ROLES)
+	has_other_roles = bool(current_roles - NON_RESTRICTIVE_ROLES)
+
+	if has_inquiry_role and not has_other_roles:
+		if not doc.module_profile:
+			doc.module_profile = MODULE_PROFILE_NAME
+	elif doc.module_profile == MODULE_PROFILE_NAME and has_other_roles:
+		doc.module_profile = None
+
+
+def sync_inquiry_user_role(doc, method=None):
+	"""User.validate: keep the internal "Inquiry User" umbrella role (used only
+	to satisfy the Inquiry Workflow's single-role `allow_edit` slot) in sync
+	with whether this user holds any of the three real Inquiry roles. Runs in
+	`validate` (not `on_update`) so the role list is fixed up as part of the
+	same save instead of triggering a second, recursive save."""
+	if not frappe.db.exists("Role", UMBRELLA_ROLE):
+		return
+
+	current_roles = {r.role for r in doc.get("roles")}
+	has_inquiry_role = bool(current_roles & INQUIRY_ROLES)
+	has_umbrella_role = UMBRELLA_ROLE in current_roles
+
+	if has_inquiry_role and not has_umbrella_role:
+		doc.append("roles", {"role": UMBRELLA_ROLE})
+	elif has_umbrella_role and not has_inquiry_role:
+		doc.set("roles", [r for r in doc.get("roles") if r.role != UMBRELLA_ROLE])
 
 
 def sync_marketer_user_permission(doc, method=None):

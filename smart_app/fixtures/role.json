@@ -19,5 +19,12 @@
   "role_name": "Marketer",
   "desk_access": 1,
   "disabled": 0
+ },
+ {
+  "doctype": "Role",
+  "name": "Inquiry User",
+  "role_name": "Inquiry User",
+  "desk_access": 1,
+  "disabled": 0
  }
 ]

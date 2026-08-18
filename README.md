@@ -12,10 +12,15 @@ dashboards, KPIs, kanban and reports.
 - **Inquiry Item** child table (Item + Quantity only — no rates/values)
 - Four manager-editable master lists: **Inquiry Shipment Mode**,
   **Inquiry Payment Mode**, **Inquiry Incoterm**, **Inquiry Category**
-- Three roles: **Inquiry Manager**, **Inquiry Officer**, **Marketer**
-- A "referred party" scenario with an automated **Create Customer** action
-- A dedicated **Smart App** Workspace (shortcuts, KPIs, charts) plus a
-  shortcut card added to the default **Home** workspace
+- Four roles: **Inquiry Manager**, **Inquiry Officer**, **Marketer**, and an
+  internal **Inquiry User** umbrella role (see Roles & permissions below)
+- A "referred party" scenario with an automated **Create Customer** action,
+  and an automated **Create New Marketer** action (User + Employee, always
+  restricted to exactly the Marketer role)
+- A dedicated **Smart App** Workspace (shortcuts to every form/report/master
+  list, KPIs, charts) plus a shortcut card added to the default **Home**
+  workspace, and every other workspace hidden for users whose roles are
+  entirely Inquiry-related (see below)
 - A **Kanban Board**, a **Dashboard**, 4 **Dashboard Charts**, 4 **Number
   Cards (KPIs)**, 2 **Query Reports**, and 1 **Print Format**
 - Everything above is created automatically on `bench install-app` (and kept
@@ -30,7 +35,7 @@ be layered on in a later phase, once the base Inquiry flow is confirmed.
 |---|---|
 | `naming_series` | `INQ-.YYYY.-####` |
 | `inquiry_date` | defaults to today |
-| `inquiry_status` | Open / Quotation / Replied / Converted / Lost / Closed — driven by the **Inquiry Workflow** |
+| `inquiry_status` | Open / Quotation / Replied / Converted / Lost / Closed — driven by the **Inquiry Workflow**. Active states (Open/Quotation/Replied) are editable by Inquiry Officer, Marketer or Inquiry Manager; terminal states (Converted/Lost/Closed) are editable by Inquiry Manager only |
 | `category` | Link → Inquiry Category (NPD / Commercial, manager-editable) |
 | `company` | for multi-company setups |
 | `inquiry_source` | Link → Customer — quick-create a new Customer inline, just like any other Link |
@@ -51,7 +56,9 @@ be layered on in a later phase, once the base Inquiry flow is confirmed.
   details), plus create/write/delete on all four master lists, plus
   read/write access to the `Workflow`, `Workflow State` and
   `Workflow Action Master` doctypes so the status flow / lists can be
-  amended without needing System Manager.
+  amended without needing System Manager. Also the only role that can create
+  a brand-new Marketer (see below), and can edit an Inquiry in any status
+  (see Workflow, below).
 - **Inquiry Officer** — can create/read/write Inquiries, but never sees the
   customer's contact details (only the customer's name) because those
   fields sit at Permission Level 1, which this role is not granted.
@@ -63,6 +70,59 @@ be layered on in a later phase, once the base Inquiry flow is confirmed.
   in sync automatically whenever an Employee or User record is saved
   (`smart_app.smart_app.utils`), plus a server-side `validate()` guard in
   `inquiry.py`.
+- **Inquiry User** — an internal, non-user-facing umbrella role. It carries no
+  DocType permissions of its own; it exists only because the Inquiry
+  Workflow's per-state "who can edit while in this state" setting accepts a
+  single role, and Inquiry Officer/Marketer/Inquiry Manager are three
+  different roles. It's auto-granted to (and revoked from) any User who holds
+  one of those three roles, via a `validate` hook on User — you never assign
+  it by hand.
+
+### Customer / Item / Employee access
+
+None of the three roles have any permission on core **Customer**, **Item** or
+**Employee** by default, which would otherwise make the `inquiry_source`,
+`items.item` and `marketer` fields unusable (Frappe requires at least
+`select` on a doctype to search/pick it in a Link field). `install.py` grants
+exactly what's needed, least-privilege:
+
+| Doctype | Inquiry Officer / Marketer | Inquiry Manager |
+|---|---|---|
+| Customer | select, read, create | select, read, write, create |
+| Item | select, read, create (a "New Product Development" Inquiry is often about an item that doesn't exist yet) | select, read, create |
+| Employee | select only (just enough to search the Marketer field — no read/write, since Employee records carry unrelated HR data) | select only |
+
+Creating a **new Marketer** is *not* done by widening Employee permissions —
+that would mean touching sensitive HR fields. Instead there's a "Create" →
+"New Marketer" button on the Inquiry form (visible to Inquiry Manager /
+System Manager only) that calls the whitelisted
+`smart_app.smart_app.doctype.inquiry.inquiry.create_marketer(full_name,
+email)`. It always assigns exactly the **Marketer** role — never anything
+caller-supplied — so it can't become a path to escalate to arbitrary roles
+even though it runs with `ignore_permissions=True` internally.
+
+### Focused sidebar (hiding every other workspace)
+
+A **Module Profile** named `Inquiry Team` is created on install, blocking
+every module except Smart App. It's auto-assigned to a User (via the same
+`validate` hook on User, in `smart_app.smart_app.utils.sync_module_profile`)
+**only if every role that User holds is Inquiry-related** (Inquiry Manager /
+Inquiry Officer / Marketer / Inquiry User, plus the harmless baseline roles
+every user has like `All`/`Desk User`). A user who *also* holds an unrelated
+role — e.g. someone who is both a Marketer and a Sales User — is left
+completely untouched, so their access to Selling/other workspaces is never
+affected. System Manager is always excluded. If you need a mixed-role user to
+get the focused sidebar too, either broaden `Inquiry Team`'s blocked-module
+list manually, or clear their `module_profile` field yourself — the sync
+logic never overwrites a Module Profile it didn't set itself.
+
+## Workspace shortcuts
+
+The **Smart App** workspace ships with shortcuts to every form, list, board,
+dashboard and report relevant to an Inquiry user: New Inquiry, Inquiry List,
+Inquiry Kanban, Inquiry Report view, Inquiry Dashboard, both Query Reports
+(Marketer Performance, Inquiry Status Summary), Customers, and all four
+master lists (Mode of Shipment, Mode of Payment, Incoterms, Category).
 
 ## Installation
 
@@ -86,13 +146,21 @@ Employee record linked via `user_id`). Open **Smart App** from the sidebar
 
 `install.py` runs every setup step (roles, master data, workflow, kanban
 board, charts, KPIs, dashboard, reports, print format, workspace) in its own
-try/except and commits independently, so one failing step (e.g. a Workspace
-JSON-schema difference on a future Frappe point release) never blocks the
+try/except and commits independently, so one failing step never blocks the
 rest. Check **Error Log** (`bench --site <your-site> console` →
 `frappe.get_all("Error Log", limit=5, order_by="creation desc")`, or the Error
-Log list in the desk) for the exact step and re-run
-`bench --site <your-site> execute smart_app.install.setup` after fixing/
-upgrading — it's fully idempotent and safe to re-run any time.
+Log list in the desk) for the exact step. After pulling an updated version of
+this app (`bench get-app smart_app --branch main --overwrite` or `git pull`
+inside `apps/smart_app`, then `bench build`), re-run:
+
+```bash
+bench --site <your-site> migrate
+```
+
+`setup()` is fully idempotent — every step only creates what's missing and
+leaves existing records alone, so it's always safe to re-run, including via
+`bench --site <your-site> execute smart_app.install.setup` directly if you
+want to force it outside of a migrate.
 
 ## Roadmap
 

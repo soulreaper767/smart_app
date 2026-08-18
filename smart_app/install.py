@@ -29,7 +29,16 @@ CARD_NAMES = [
 	"Open Pipeline Value",
 ]
 
-REPORT_NAMES = ["Marketer Performance", "Inquiry Status Summary"]
+WORKFLOW_ACTIONS = [
+	"Send for Quotation",
+	"Mark as Replied",
+	"Mark as Lost",
+	"Convert",
+	"Close",
+	"Reopen",
+]
+
+MODULE_PROFILE_NAME = "Inquiry Team"
 
 SHORTCUTS = [
 	{"label": "New Inquiry", "type": "DocType", "link_to": "Inquiry", "doc_view": "New", "color": "Blue"},
@@ -39,11 +48,20 @@ SHORTCUTS = [
 		"type": "DocType",
 		"link_to": "Inquiry",
 		"doc_view": "Kanban",
+		"kanban_board": "Inquiry Status Board",
 		"color": "Green",
 	},
 	{"label": "Inquiry Report", "type": "DocType", "link_to": "Inquiry", "doc_view": "Report", "color": "Green"},
+	{"label": "Inquiry Dashboard", "type": "Dashboard", "link_to": "Inquiry Dashboard", "color": "Orange"},
 	{"label": "Marketer Performance", "type": "Report", "link_to": "Marketer Performance", "color": "Orange"},
 	{"label": "Inquiry Status Summary", "type": "Report", "link_to": "Inquiry Status Summary", "color": "Orange"},
+	{"label": "Customers", "type": "DocType", "link_to": "Customer", "doc_view": "List", "color": "Purple"},
+	{
+		"label": "Inquiry Workflow",
+		"type": "URL",
+		"url": "/app/workflow/Inquiry Workflow",
+		"color": "Purple",
+	},
 	{
 		"label": "Mode of Shipment",
 		"type": "DocType",
@@ -85,6 +103,7 @@ def after_migrate():
 
 def setup():
 	run_step(ensure_roles, "roles")
+	run_step(grant_master_data_access, "customer/item/employee access")
 	run_step(seed_master_data, "master data")
 	run_step(setup_workflow, "workflow")
 	run_step(setup_kanban_board, "kanban board")
@@ -96,6 +115,7 @@ def setup():
 	run_step(setup_workspace, "workspace")
 	run_step(add_home_workspace_shortcut, "home workspace shortcut")
 	run_step(grant_inquiry_manager_workflow_access, "inquiry manager workflow access")
+	run_step(setup_module_profile, "restricted module profile")
 
 	frappe.db.commit()
 	frappe.clear_cache()
@@ -117,11 +137,51 @@ def run_step(fn, label):
 
 
 def ensure_roles():
-	for role in ("Inquiry Manager", "Inquiry Officer", "Marketer"):
+	# "Inquiry User" is an internal umbrella role (auto-synced onto any user who
+	# holds Inquiry Manager / Inquiry Officer / Marketer, see utils.py) used only
+	# to satisfy the Inquiry Workflow's mandatory single-role "allow_edit" slot
+	# for the active states — it carries no DocType permissions of its own.
+	for role in ("Inquiry Manager", "Inquiry Officer", "Marketer", "Inquiry User"):
 		if not frappe.db.exists("Role", role):
 			frappe.get_doc({"doctype": "Role", "role_name": role, "desk_access": 1}).insert(
 				ignore_permissions=True
 			)
+
+
+# ---------------------------------------------------------------------------
+# Access to Customer / Item / Employee for whoever creates Inquiries
+# ---------------------------------------------------------------------------
+
+
+def grant_master_data_access():
+	"""None of Inquiry Officer / Marketer / Inquiry Manager have any
+	permission on core Customer/Item/Employee out of the box, which would
+	otherwise make the `inquiry_source`, `items.item` and `marketer` Link
+	fields unusable (Frappe blocks Link search/select without at least
+	`select` on the target doctype). Grant only what each role actually
+	needs, on principle of least privilege:
+	  - Customer: select+read+create so a Customer can be found or quick-
+	    created right from the Inquiry form (Inquiry Manager also gets write,
+	    for corrections).
+	  - Item: select+read+create for all three — Inquiry is frequently about
+	    a brand-new product (see the NPD category), so frontline staff need
+	    to be able to add a new Item inline, not just select existing ones.
+	  - Employee: select only, and only enough to power the Marketer link
+	    field's search dropdown. No read/write, since Employee records carry
+	    sensitive HR data unrelated to this app. Creating a *new* Marketer is
+	    deliberately NOT done via raw Employee permissions — see
+	    `create_marketer` in inquiry.py, which is restricted to Inquiry
+	    Manager and only ever assigns the fixed "Marketer" role, so this
+	    doesn't become a path to escalate to arbitrary roles.
+	"""
+	for role in ("Inquiry Officer", "Marketer"):
+		_grant_custom_docperm("Customer", role, select=1, read=1, create=1)
+		_grant_custom_docperm("Item", role, select=1, read=1, create=1)
+		_grant_custom_docperm("Employee", role, select=1)
+
+	_grant_custom_docperm("Customer", "Inquiry Manager", select=1, read=1, write=1, create=1)
+	_grant_custom_docperm("Item", "Inquiry Manager", select=1, read=1, create=1)
+	_grant_custom_docperm("Employee", "Inquiry Manager", select=1)
 
 
 # ---------------------------------------------------------------------------
@@ -175,11 +235,26 @@ def _seed(doctype, fieldname, values):
 
 
 def setup_workflow():
+	_ensure_workflow_masters()
+
 	if frappe.db.exists("Workflow", "Inquiry Workflow"):
 		return
 
 	all_roles = ["Inquiry Officer", "Marketer", "Inquiry Manager"]
 	manager_only = ["Inquiry Manager"]
+
+	# Only one role can be granted edit rights per state (core Frappe
+	# constraint), so the umbrella "Inquiry User" role (auto-synced onto
+	# anyone holding Inquiry Officer / Marketer / Inquiry Manager) covers the
+	# active states, while the terminal states are locked to managers only.
+	edit_role_by_state = {
+		"Open": "Inquiry User",
+		"Quotation": "Inquiry User",
+		"Replied": "Inquiry User",
+		"Converted": "Inquiry Manager",
+		"Lost": "Inquiry Manager",
+		"Closed": "Inquiry Manager",
+	}
 
 	transitions = [
 		("Open", "Send for Quotation", "Quotation", all_roles),
@@ -202,7 +277,10 @@ def setup_workflow():
 	workflow.send_email_alert = 0
 
 	for state in STATUSES:
-		workflow.append("states", {"state": state, "doc_status": "0"})
+		workflow.append(
+			"states",
+			{"state": state, "doc_status": "0", "allow_edit": edit_role_by_state[state]},
+		)
 
 	for from_state, action, next_state, roles in transitions:
 		for role in roles:
@@ -218,6 +296,22 @@ def setup_workflow():
 			)
 
 	workflow.insert(ignore_permissions=True)
+
+
+def _ensure_workflow_masters():
+	"""Workflow Document State.state / Workflow Transition.action(+state+next_state)
+	are Links to Workflow State / Workflow Action Master respectively, and must
+	exist before the Workflow document referencing them can be saved."""
+	for state in STATUSES:
+		if not frappe.db.exists("Workflow State", state):
+			frappe.get_doc({"doctype": "Workflow State", "workflow_state_name": state}).insert(
+				ignore_permissions=True
+			)
+	for action in WORKFLOW_ACTIONS:
+		if not frappe.db.exists("Workflow Action Master", action):
+			frappe.get_doc(
+				{"doctype": "Workflow Action Master", "workflow_action_name": action}
+			).insert(ignore_permissions=True)
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +385,7 @@ def setup_dashboard_charts():
 		chart.timeseries = c.get("timeseries", 0)
 		chart.time_interval = c.get("time_interval", "Yearly")
 		chart.timespan = c.get("timespan", "Last Year")
+		chart.filters_json = "[]"
 		chart.is_public = 1
 		chart.module = MODULE
 		chart.insert(ignore_permissions=True)
@@ -642,3 +737,24 @@ def _grant_custom_docperm(doctype, role, **perms):
 			**perms,
 		}
 	).insert(ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
+# Restricted sidebar: users whose ONLY roles are Inquiry-related see just the
+# Smart App workspace (see smart_app.smart_app.utils.sync_module_profile for
+# the per-user auto-assignment, which deliberately leaves mixed-role users —
+# e.g. someone who is also a Sales User — untouched).
+# ---------------------------------------------------------------------------
+
+
+def setup_module_profile():
+	if frappe.db.exists("Module Profile", MODULE_PROFILE_NAME):
+		return
+
+	all_modules = frappe.get_all("Module Def", pluck="name")
+	profile = frappe.new_doc("Module Profile")
+	profile.module_profile_name = MODULE_PROFILE_NAME
+	for module in all_modules:
+		if module != MODULE:
+			profile.append("block_modules", {"module": module})
+	profile.insert(ignore_permissions=True)

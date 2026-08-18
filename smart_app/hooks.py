@@ -13,7 +13,9 @@ app_version = "0.1.0"
 fixtures = [
 	{
 		"doctype": "Role",
-		"filters": [["name", "in", ["Inquiry Manager", "Inquiry Officer", "Marketer"]]],
+		"filters": [
+			["name", "in", ["Inquiry Manager", "Inquiry Officer", "Marketer", "Inquiry User"]]
+		],
 	}
 ]
 
@@ -29,6 +31,10 @@ doc_events = {
 		"on_update": "smart_app.smart_app.utils.sync_marketer_user_permission",
 	},
 	"User": {
+		"validate": [
+			"smart_app.smart_app.utils.sync_inquiry_user_role",
+			"smart_app.smart_app.utils.sync_module_profile",
+		],
 		"on_update": "smart_app.smart_app.utils.sync_marketer_user_permission_for_user",
 	},
 }
