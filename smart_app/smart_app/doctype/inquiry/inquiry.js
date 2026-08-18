@@ -41,46 +41,6 @@ frappe.ui.form.on("Inquiry", {
 	refresh: function (frm) {
 		frm.trigger("set_status_indicator");
 		frm.trigger("show_create_customer_button");
-		frm.trigger("show_create_marketer_button");
-	},
-
-	show_create_marketer_button: function (frm) {
-		const roles = frappe.user_roles;
-		const can_create_marketer =
-			roles.includes("Inquiry Manager") ||
-			roles.includes("Inquiry Officer") ||
-			roles.includes("Marketer") ||
-			roles.includes("Inquiry User") ||
-			roles.includes("System Manager");
-		if (can_create_marketer) {
-			frm.add_custom_button(
-				__("New Marketer"),
-				function () {
-					frappe.prompt(
-						[
-							{ fieldname: "full_name", label: __("Full Name"), fieldtype: "Data", reqd: 1 },
-							{ fieldname: "email", label: __("Email"), fieldtype: "Data", options: "Email", reqd: 1 },
-						],
-						function (values) {
-							frappe.call({
-								method: "smart_app.smart_app.doctype.inquiry.inquiry.create_marketer",
-								args: values,
-								freeze: true,
-								freeze_message: __("Creating Marketer..."),
-								callback: function (r) {
-									if (r.message) {
-										frm.set_value("marketer", r.message);
-									}
-								},
-							});
-						},
-						__("Create New Marketer"),
-						__("Create")
-					);
-				},
-				__("Create")
-			);
-		}
 	},
 
 	set_status_indicator: function (frm) {

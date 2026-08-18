@@ -56,6 +56,30 @@ def sync_inquiry_user_role(doc, method=None):
 		doc.set("roles", [r for r in doc.get("roles") if r.role != UMBRELLA_ROLE])
 
 
+def auto_assign_marketer_role(doc, method=None):
+	"""Employee.on_update: Employee carries full create+write for Inquiry
+	Officer/Marketer/Inquiry Manager so the Marketer link field's own
+	"+ Create a New Employee" quick-create works the same way every other
+	Link field in this app does — but that generic Employee form has no way
+	to also assign a role. So: whenever an Employee gets a `user_id` linked
+	by someone holding one of our Inquiry roles, auto-grant that user the
+	Marketer role, since linking a user from this app's context only makes
+	sense if they're meant to become a Marketer. Left alone for anyone
+	editing Employee without any Inquiry role (e.g. HR staff), so this never
+	surprises an unrelated Employee edit."""
+	if not doc.user_id:
+		return
+
+	session_roles = set(frappe.get_roles(frappe.session.user))
+	if not (session_roles & INQUIRY_ROLES):
+		return
+
+	user = frappe.get_doc("User", doc.user_id)
+	if "Marketer" not in [r.role for r in user.roles]:
+		user.append("roles", {"role": "Marketer"})
+		user.save(ignore_permissions=True)
+
+
 def sync_marketer_user_permission(doc, method=None):
 	"""Employee.on_update: keep the Marketer -> Employee User Permission in sync."""
 	sync_marketer_permission_for_employee(doc.name)

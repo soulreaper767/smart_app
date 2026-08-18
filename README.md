@@ -14,9 +14,7 @@ dashboards, KPIs, kanban and reports.
   **Inquiry Payment Mode**, **Inquiry Incoterm**, **Inquiry Category**
 - Four roles: **Inquiry Manager**, **Inquiry Officer**, **Marketer**, and an
   internal **Inquiry User** umbrella role (see Roles & permissions below)
-- A "referred party" scenario with an automated **Create Customer** action,
-  and an automated **Create New Marketer** action (User + Employee, always
-  restricted to exactly the Marketer role)
+- A "referred party" scenario with an automated **Create Customer** action
 - A dedicated **Smart App** Workspace (shortcuts to every form/report/master
   list, KPIs, charts) plus a shortcut card added to the default **Home**
   workspace, and every other workspace hidden for users whose roles are
@@ -88,29 +86,34 @@ in a Link field, and some client-side lookups need full `read`).
 `grant_master_data_access` in `install.py` grants exactly what's needed,
 least-privilege:
 
-| Doctype | Inquiry Officer / Marketer | Inquiry Manager |
-|---|---|---|
-| Customer | select, read, create | select, read, write, create |
-| Item | select, read, create (a "New Product Development" Inquiry is often about an item that doesn't exist yet) | select, read, create |
-| Employee | select only (just enough to search the Marketer field — no read/write, since Employee records carry unrelated HR data) | select only |
-| Company, Currency, Country, User | select, read | select, read |
-| Contact, Address | — (matches the Permission Level 1 restriction that already hides these fields on the form) | select, read |
+| Doctype | Inquiry Officer / Marketer / Inquiry Manager |
+|---|---|
+| Customer | select, read, create (Inquiry Manager also gets write, for corrections) |
+| Item | select, read, create (a "New Product Development" Inquiry is often about an item that doesn't exist yet) |
+| Employee | select, read, create, write |
+| Company, Currency, Country, User | select, read |
+| Contact, Address | Inquiry Manager only (select, read) — matches the Permission Level 1 restriction that already hides these fields on the form for the other two roles |
 
-Creating a **new Marketer** is *not* done by widening Employee permissions —
-that would mean touching sensitive HR fields. Instead there's a "Create" →
-"New Marketer" button on the Inquiry form, open to anyone who works with
-Inquiries (Inquiry Officer / Marketer / Inquiry Manager / System Manager —
-frontline staff are usually the ones who notice a new marketer needs
-onboarding), that calls the whitelisted
-`smart_app.smart_app.doctype.inquiry.inquiry.create_marketer(full_name,
-email)`. Opening this up beyond Inquiry Manager stays safe because it always
-assigns exactly the **Marketer** role — never anything caller-supplied — so
-it can't become a path to escalate to arbitrary roles even though it runs
-with `ignore_permissions=True` internally. Similarly,
-the "auto-fill my Marketer record" convenience on a new Inquiry goes through
-the whitelisted `get_my_marketer_employee` rather than a plain
-`frappe.db.get_list` client call, since that requires full `read` on
-Employee where the narrower `select` (above) doesn't.
+**Creating a new Marketer** uses the exact same "+ Create a New Employee"
+quick-create every other Link field in this app already has — click into the
+Marketer field, search, and "Create a New Employee" appears at the bottom
+like it does for Customer/Item, rather than a bespoke dialog. This is why
+Employee gets full create+write above (a wider surface than the
+select-only design this app started with, chosen deliberately to match core
+ERPNext's own UX). The generic Employee quick-create form has no way to also
+assign a role, though, so `auto_assign_marketer_role` (Employee `on_update`,
+in `utils.py`) fills that gap: whenever an Employee gets a `user_id` linked
+by someone holding an Inquiry role, that user is automatically granted the
+Marketer role — since linking a user from this app's context only makes
+sense if they're meant to become one. It's left alone for anyone editing
+Employee without any Inquiry role (e.g. HR staff), so it never surprises an
+unrelated Employee edit.
+
+The "auto-fill my Marketer record" convenience on a *new* Inquiry (for a
+user who's already a Marketer) still goes through the whitelisted
+`get_my_marketer_employee` rather than a plain `frappe.db.get_list` client
+call — no functional difference now that Employee has full read, but it
+avoids an unnecessary round trip.
 
 ### Focused sidebar (hiding other workspaces)
 

@@ -28,7 +28,10 @@ after_migrate = "smart_app.install.after_migrate"
 # ------------------
 doc_events = {
 	"Employee": {
-		"on_update": "smart_app.smart_app.utils.sync_marketer_user_permission",
+		"on_update": [
+			"smart_app.smart_app.utils.auto_assign_marketer_role",
+			"smart_app.smart_app.utils.sync_marketer_user_permission",
+		],
 	},
 	"User": {
 		"validate": [

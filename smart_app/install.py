@@ -204,23 +204,26 @@ def grant_master_data_access():
 	(Contact/Address, Permission Level 1 — Inquiry Manager only, matching
 	who can even see those fields on the form).
 
-	Grants are least-privilege per role:
+	Grants are least-privilege per role, with one deliberate exception:
 	  - Customer: select+read+create so a Customer can be found or quick-
 	    created right from the Inquiry form (Inquiry Manager also gets write,
 	    for corrections).
 	  - Item: select+read+create for all three — Inquiry is frequently about
 	    a brand-new product (see the NPD category), so frontline staff need
 	    to be able to add a new Item inline, not just select existing ones.
-	  - Employee: select only, and only enough to power the Marketer link
-	    field's search dropdown. No read/write, since Employee records carry
-	    sensitive HR data unrelated to this app — the client-side "auto-fill
-	    my own Marketer record" convenience goes through a whitelisted
-	    server method instead of a direct read-permission-gated list call
-	    (see get_my_marketer_employee in inquiry.py). Creating a *new*
-	    Marketer is deliberately NOT done via raw Employee permissions either
-	    — see `create_marketer`, restricted to Inquiry Manager and always
-	    assigning exactly the "Marketer" role, so this doesn't become a path
-	    to escalate to arbitrary roles.
+	  - Employee: select+read+create+write for all three, matching the
+	    standard "+ Create a New Employee" quick-create in the Marketer link
+	    field's own dropdown, the same experience every other Link field in
+	    this app has. This does expose standard Employee fields (not
+	    Employee-sensitive payroll/salary data, which lives in separate
+	    doctypes this app is never granted), which is a wider surface than
+	    the original select-only design — accepted deliberately so the
+	    create-a-Marketer flow matches core ERPNext's own UX instead of a
+	    bespoke dialog. Whenever an Employee gets a `user_id` linked by
+	    someone holding an Inquiry role, `auto_assign_marketer_role` (Employee
+	    on_update, in utils.py) automatically grants that user the Marketer
+	    role, since linking a user from this app's context only makes sense
+	    if they're meant to become a Marketer.
 	  - Company / Currency / Country / User: select+read for everyone who
 	    can create an Inquiry — these are plain reference data, no
 	    create/write needed.
@@ -228,22 +231,19 @@ def grant_master_data_access():
 	    the Permission Level 1 restriction that already hides those fields
 	    from Inquiry Officer/Marketer on the form itself.
 	"""
-	for role in ("Inquiry Officer", "Marketer"):
-		_grant_custom_docperm("Customer", role, select=1, read=1, create=1)
-		_grant_custom_docperm("Item", role, select=1, read=1, create=1)
-		_grant_custom_docperm("Employee", role, select=1)
+	for role in ("Inquiry Officer", "Marketer", "Inquiry Manager"):
+		_grant_custom_docperm("Employee", role, select=1, read=1, create=1, write=1)
 		_grant_custom_docperm("Company", role, select=1, read=1)
 		_grant_custom_docperm("Currency", role, select=1, read=1)
 		_grant_custom_docperm("Country", role, select=1, read=1)
 		_grant_custom_docperm("User", role, select=1, read=1)
 
+	for role in ("Inquiry Officer", "Marketer"):
+		_grant_custom_docperm("Customer", role, select=1, read=1, create=1)
+		_grant_custom_docperm("Item", role, select=1, read=1, create=1)
+
 	_grant_custom_docperm("Customer", "Inquiry Manager", select=1, read=1, write=1, create=1)
 	_grant_custom_docperm("Item", "Inquiry Manager", select=1, read=1, create=1)
-	_grant_custom_docperm("Employee", "Inquiry Manager", select=1)
-	_grant_custom_docperm("Company", "Inquiry Manager", select=1, read=1)
-	_grant_custom_docperm("Currency", "Inquiry Manager", select=1, read=1)
-	_grant_custom_docperm("Country", "Inquiry Manager", select=1, read=1)
-	_grant_custom_docperm("User", "Inquiry Manager", select=1, read=1)
 	_grant_custom_docperm("Contact", "Inquiry Manager", select=1, read=1)
 	_grant_custom_docperm("Address", "Inquiry Manager", select=1, read=1)
 
@@ -954,21 +954,37 @@ def grant_inquiry_manager_workflow_access():
 
 
 def _grant_custom_docperm(doctype, role, **perms):
-	if frappe.db.exists(
-		"Custom DocPerm", {"parent": doctype, "role": role, "permlevel": 0}
-	):
-		return
-	frappe.get_doc(
-		{
-			"doctype": "Custom DocPerm",
-			"parent": doctype,
-			"parenttype": "DocType",
-			"parentfield": "permissions",
-			"role": role,
-			"permlevel": 0,
-			**perms,
-		}
-	).insert(ignore_permissions=True)
+	"""Reconciles the grant on every run (not just create-once), so widening
+	or narrowing a permission set in this file self-heals on the next
+	migrate instead of being stuck with whatever was granted the first time
+	a given (doctype, role) pair was seen."""
+	existing_name = frappe.db.get_value(
+		"Custom DocPerm", {"parent": doctype, "role": role, "permlevel": 0}, "name"
+	)
+	if existing_name:
+		doc = frappe.get_doc("Custom DocPerm", existing_name)
+	else:
+		doc = frappe.get_doc(
+			{
+				"doctype": "Custom DocPerm",
+				"parent": doctype,
+				"parenttype": "DocType",
+				"parentfield": "permissions",
+				"role": role,
+				"permlevel": 0,
+			}
+		)
+
+	changed = False
+	for key, value in perms.items():
+		if doc.get(key) != value:
+			doc.set(key, value)
+			changed = True
+
+	if doc.is_new():
+		doc.insert(ignore_permissions=True)
+	elif changed:
+		doc.save(ignore_permissions=True)
 
 
 # ---------------------------------------------------------------------------

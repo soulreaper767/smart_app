@@ -7,7 +7,6 @@ from frappe.model.document import Document
 from frappe.model.mapper import get_mapped_doc
 from frappe.contacts.doctype.contact.contact import get_default_contact
 from frappe.contacts.doctype.address.address import get_default_address
-from frappe.utils import validate_email_address
 
 
 class Inquiry(Document):
@@ -172,82 +171,6 @@ def create_customer_from_referred_party(inquiry_name):
 
 	frappe.msgprint(_("Customer {0} created from the referred party details.").format(customer.name))
 	return customer.name
-
-
-CREATE_MARKETER_ROLES = {
-	"Inquiry Manager",
-	"Inquiry Officer",
-	"Marketer",
-	"Inquiry User",
-	"System Manager",
-}
-
-
-@frappe.whitelist()
-def create_marketer(full_name, email):
-	"""Onboard a brand-new Marketer (User + Employee) from the Inquiry form.
-
-	Open to anyone who works with Inquiries (Inquiry Officer/Marketer/Inquiry
-	Manager, via the umbrella Inquiry User role, plus System Manager) rather
-	than Inquiry Manager only -- frontline staff are usually the ones who
-	notice a new marketer needs onboarding. This stays safe to open up
-	because it always assigns exactly the "Marketer" role (never anything
-	caller-supplied), so it can't be used as a path to grant arbitrary roles
-	even though it runs with ignore_permissions=True to create the
-	User/Employee records."""
-	if not (CREATE_MARKETER_ROLES & set(frappe.get_roles(frappe.session.user))):
-		frappe.throw(
-			_("You do not have permission to create a new Marketer."), frappe.PermissionError
-		)
-
-	full_name = (full_name or "").strip()
-	email = (email or "").strip()
-	if not full_name or not email:
-		frappe.throw(_("Full Name and Email are required to create a new Marketer."))
-
-	validate_email_address(email, throw=True)
-
-	if frappe.db.exists("User", email):
-		user = frappe.get_doc("User", email)
-		if "Marketer" not in [r.role for r in user.roles]:
-			user.append("roles", {"role": "Marketer"})
-			user.save(ignore_permissions=True)
-	else:
-		user = frappe.get_doc(
-			{
-				"doctype": "User",
-				"email": email,
-				"first_name": full_name.split(" ")[0],
-				"full_name": full_name,
-				"send_welcome_email": 1,
-				"user_type": "System User",
-			}
-		)
-		user.append("roles", {"role": "Marketer"})
-		user.insert(ignore_permissions=True)
-
-	employee_name = frappe.db.get_value("Employee", {"user_id": user.name}, "name")
-	if not employee_name:
-		company = frappe.defaults.get_user_default("Company")
-		if not company:
-			companies = frappe.get_all("Company", limit=1, pluck="name")
-			company = companies[0] if companies else None
-
-		employee = frappe.get_doc(
-			{
-				"doctype": "Employee",
-				"employee_name": full_name,
-				"first_name": full_name.split(" ")[0],
-				"user_id": user.name,
-				"company": company,
-				"status": "Active",
-			}
-		)
-		employee.insert(ignore_permissions=True, ignore_mandatory=True)
-		employee_name = employee.name
-
-	frappe.msgprint(_("Marketer {0} is ready to use.").format(employee_name))
-	return employee_name
 
 
 @frappe.whitelist()
