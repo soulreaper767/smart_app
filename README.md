@@ -108,15 +108,20 @@ curated list of ERPNext/HRMS/Webshop/Payments *business* modules
 (`BUSINESS_MODULES_TO_HIDE` in `install.py`: Accounts, Buying, Selling,
 Stock, CRM, Support, Projects, Assets, Manufacturing, HR, Payroll, etc). It
 is deliberately a **blocklist, not "everything except Smart App"** — an
-earlier version tried the latter and it hid the **Home** workspace too
-(Home lives in one of Frappe's own foundational modules), leaving affected
-users with no workspace at all. Frappe's own infrastructure modules (Desk,
-Core, Website, Automation, Integrations, ...) are never touched, so an
-unrecognised module — including ones from apps this list doesn't know about
-— defaults to staying **visible**, not hidden. If your site has other
-business modules that should also be hidden, add them to
-`BUSINESS_MODULES_TO_HIDE` and re-run migrate (the block list is rebuilt
-from that constant on every run, so edits self-heal).
+earlier version tried the latter and it hid the **Home** workspace too. So
+does simply blocklisting every module that "sounds like" a business module:
+on ERPNext v15 the **Home** workspace's own module is `Setup` (confirmed
+against a live site), so `Setup` must never appear in
+`BUSINESS_MODULES_TO_HIDE` even though it's also home to the more
+sensitive **ERP Settings**/**ERPNext Settings** workspaces — Frappe blocks
+by module, not by individual workspace, so those two stay visible in the
+sidebar as a cosmetic (not access) tradeoff; the underlying settings
+doctypes' permissions are untouched. Any module this list doesn't
+recognise — including ones from apps it's never heard of — defaults to
+staying **visible**, not hidden. If your site has other business modules
+that should also be hidden, add them to `BUSINESS_MODULES_TO_HIDE` and
+re-run migrate (the block list is rebuilt from that constant on every run,
+so edits self-heal).
 
 The profile is auto-assigned to a User (via the same `validate` hook on
 User, in `smart_app.smart_app.utils.sync_module_profile`) **only if every

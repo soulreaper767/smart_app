@@ -45,9 +45,15 @@ MODULE_PROFILE_NAME = "Inquiry Team"
 # module except Smart App" — this app has no way to know every module a
 # given site has (including ones from apps it's never heard of), and a
 # blocklist means an unrecognised module defaults to STAYING VISIBLE rather
-# than being silently hidden. Frappe's own foundational modules (Desk, Core,
-# Website, Automation, Integrations, etc. — which is where the Home
-# workspace itself lives) are intentionally never in this list.
+# than being silently hidden.
+#
+# NOTE: on ERPNext v15 the Home workspace's own module is "Setup" (verified
+# against a live site), not one of Frappe's core Desk/Core modules as you'd
+# expect — so "Setup" must NEVER be in this list, or Home disappears along
+# with it. The unavoidable tradeoff: ERP Settings/ERPNext Settings (also
+# module "Setup") stay visible in the sidebar too, since Frappe blocks by
+# module, not by individual workspace. That's a cosmetic leak, not a real
+# access leak — actual permission on those settings doctypes is untouched.
 BUSINESS_MODULES_TO_HIDE = [
 	"Accounts",
 	"Buying",
@@ -64,13 +70,11 @@ BUSINESS_MODULES_TO_HIDE = [
 	"Bulk Transaction",
 	"Loan Management",
 	"Regional",
-	"Setup",
 	"HR",
 	"Payroll",
 	"Recruitment",
 	"Performance",
 	"Webshop",
-	"E-commerce",
 	"Payments",
 ]
 
