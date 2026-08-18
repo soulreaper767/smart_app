@@ -614,6 +614,45 @@ def setup_print_format():
 # ---------------------------------------------------------------------------
 
 
+LINK_CARDS = [
+	{
+		"label": "Inquiry",
+		"icon": "small-file",
+		"links": [
+			{"label": "Inquiry", "link_type": "DocType", "link_to": "Inquiry"},
+		],
+	},
+	{
+		"label": "Masters",
+		"icon": "list",
+		"links": [
+			{"label": "Inquiry Shipment Mode", "link_type": "DocType", "link_to": "Inquiry Shipment Mode"},
+			{"label": "Inquiry Payment Mode", "link_type": "DocType", "link_to": "Inquiry Payment Mode"},
+			{"label": "Inquiry Incoterm", "link_type": "DocType", "link_to": "Inquiry Incoterm"},
+			{"label": "Inquiry Category", "link_type": "DocType", "link_to": "Inquiry Category"},
+		],
+	},
+	{
+		"label": "Reports",
+		"icon": "report",
+		"links": [
+			{
+				"label": "Marketer Performance",
+				"link_type": "Report",
+				"link_to": "Marketer Performance",
+				"is_query_report": 1,
+			},
+			{
+				"label": "Inquiry Status Summary",
+				"link_type": "Report",
+				"link_to": "Inquiry Status Summary",
+				"is_query_report": 1,
+			},
+		],
+	},
+]
+
+
 def setup_workspace():
 	if frappe.db.exists("Workspace", "Smart App"):
 		workspace = frappe.get_doc("Workspace", "Smart App")
@@ -621,6 +660,7 @@ def setup_workspace():
 		workspace = _build_base_workspace()
 
 	_add_workspace_visuals(workspace)
+	_add_workspace_links(workspace)
 
 
 def _build_base_workspace():
@@ -710,6 +750,58 @@ def _add_workspace_visuals(workspace):
 				"id": frappe.generate_hash(length=10),
 				"type": "chart",
 				"data": {"chart_name": chart, "col": 6},
+			}
+		)
+
+	workspace.content = json.dumps(content)
+	workspace.save(ignore_permissions=True)
+
+
+def _add_workspace_links(workspace):
+	"""Classic ERPNext-style grouped Links section: a card per group (Inquiry,
+	Masters, Reports) each listing every doctype/report in the app. Only adds
+	cards that don't already exist, same as shortcuts/charts/number_cards, so
+	it never clobbers anything an Inquiry Manager customised by hand via the
+	workspace editor."""
+	workspace.reload()
+	content = json.loads(workspace.content or "[]")
+	existing_cards = {row.label for row in workspace.get("links") if row.type == "Card Break"}
+
+	content.append(
+		{
+			"id": frappe.generate_hash(length=10),
+			"type": "header",
+			"data": {"text": '<span class="h5">Links</span>', "col": 12},
+		}
+	)
+
+	for card in LINK_CARDS:
+		if card["label"] not in existing_cards:
+			workspace.append(
+				"links",
+				{
+					"type": "Card Break",
+					"label": card["label"],
+					"icon": card.get("icon"),
+					"link_count": len(card["links"]),
+				},
+			)
+			for link in card["links"]:
+				workspace.append(
+					"links",
+					{
+						"type": "Link",
+						"label": link["label"],
+						"link_type": link["link_type"],
+						"link_to": link["link_to"],
+						"is_query_report": link.get("is_query_report", 0),
+					},
+				)
+		content.append(
+			{
+				"id": frappe.generate_hash(length=10),
+				"type": "card",
+				"data": {"card_name": card["label"], "col": 4},
 			}
 		)
 

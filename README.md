@@ -130,13 +130,18 @@ focused sidebar too, either broaden the module list, or clear their
 `module_profile` field yourself — the sync logic never overwrites a Module
 Profile it didn't set itself.
 
-## Workspace shortcuts
+## Workspace shortcuts & links
 
-The **Smart App** workspace ships with shortcuts to every form, list, board,
-dashboard and report relevant to an Inquiry user: New Inquiry, Inquiry List,
-Inquiry Kanban, Inquiry Report view, Inquiry Dashboard, both Query Reports
-(Marketer Performance, Inquiry Status Summary), Customers, and all four
-master lists (Mode of Shipment, Mode of Payment, Incoterms, Category).
+The **Smart App** workspace ships with:
+- **Shortcuts** (the row of buttons at the top): New Inquiry, Inquiry List,
+  Inquiry Kanban, Inquiry Report view, Inquiry Dashboard, both Query Reports
+  (Marketer Performance, Inquiry Status Summary), Customers, the Inquiry
+  Workflow, and all four master lists.
+- **Links** (the classic ERPNext grouped-card section further down the
+  page, `LINK_CARDS` in `install.py`): every doctype and report the app
+  ships with, organised into **Inquiry** (the Inquiry doctype itself),
+  **Masters** (all four master lists), and **Reports** (both Query
+  Reports) cards.
 
 ## Installation
 
