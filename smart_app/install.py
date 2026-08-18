@@ -79,54 +79,54 @@ BUSINESS_MODULES_TO_HIDE = [
 ]
 
 SHORTCUTS = [
-	{"label": "New Inquiry", "type": "DocType", "link_to": "Inquiry", "doc_view": "New", "color": "Blue"},
-	{"label": "Inquiry List", "type": "DocType", "link_to": "Inquiry", "doc_view": "List", "color": "Blue"},
+	{"label": "New Inquiry", "type": "DocType", "link_to": "Inquiry", "doc_view": "New", "color": "#3B82F6"},
+	{"label": "Inquiry List", "type": "DocType", "link_to": "Inquiry", "doc_view": "List", "color": "#3B82F6"},
 	{
 		"label": "Inquiry Kanban",
 		"type": "DocType",
 		"link_to": "Inquiry",
 		"doc_view": "Kanban",
 		"kanban_board": "Inquiry Status Board",
-		"color": "Green",
+		"color": "#22C55E",
 	},
-	{"label": "Inquiry Report", "type": "DocType", "link_to": "Inquiry", "doc_view": "Report", "color": "Green"},
-	{"label": "Inquiry Dashboard", "type": "Dashboard", "link_to": "Inquiry Dashboard", "color": "Orange"},
-	{"label": "Marketer Performance", "type": "Report", "link_to": "Marketer Performance", "color": "Orange"},
-	{"label": "Inquiry Status Summary", "type": "Report", "link_to": "Inquiry Status Summary", "color": "Orange"},
-	{"label": "Customers", "type": "DocType", "link_to": "Customer", "doc_view": "List", "color": "Purple"},
+	{"label": "Inquiry Report", "type": "DocType", "link_to": "Inquiry", "doc_view": "Report Builder", "color": "#22C55E"},
+	{"label": "Inquiry Dashboard", "type": "Dashboard", "link_to": "Inquiry Dashboard", "color": "#F97316"},
+	{"label": "Marketer Performance", "type": "Report", "link_to": "Marketer Performance", "color": "#F97316"},
+	{"label": "Inquiry Status Summary", "type": "Report", "link_to": "Inquiry Status Summary", "color": "#F97316"},
+	{"label": "Customers", "type": "DocType", "link_to": "Customer", "doc_view": "List", "color": "#A855F7"},
 	{
 		"label": "Inquiry Workflow",
 		"type": "URL",
 		"url": "/app/workflow/Inquiry Workflow",
-		"color": "Purple",
+		"color": "#A855F7",
 	},
 	{
 		"label": "Mode of Shipment",
 		"type": "DocType",
 		"link_to": "Inquiry Shipment Mode",
 		"doc_view": "List",
-		"color": "Grey",
+		"color": "#94A3B8",
 	},
 	{
 		"label": "Mode of Payment",
 		"type": "DocType",
 		"link_to": "Inquiry Payment Mode",
 		"doc_view": "List",
-		"color": "Grey",
+		"color": "#94A3B8",
 	},
 	{
 		"label": "Incoterms",
 		"type": "DocType",
 		"link_to": "Inquiry Incoterm",
 		"doc_view": "List",
-		"color": "Grey",
+		"color": "#94A3B8",
 	},
 	{
 		"label": "Inquiry Category",
 		"type": "DocType",
 		"link_to": "Inquiry Category",
 		"doc_view": "List",
-		"color": "Grey",
+		"color": "#94A3B8",
 	},
 ]
 
@@ -826,7 +826,7 @@ def add_home_workspace_shortcut():
 
 	home.append(
 		"shortcuts",
-		{"label": "Smart App", "type": "URL", "url": "/app/smart-app", "color": "Blue"},
+		{"label": "Smart App", "type": "URL", "url": "/app/smart-app", "color": "#3B82F6"},
 	)
 
 	content = json.loads(home.content or "[]")
