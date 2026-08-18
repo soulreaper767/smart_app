@@ -1,0 +1,408 @@
+{
+ "actions": [],
+ "allow_import": 1,
+ "autoname": "naming_series:",
+ "creation": "2026-01-01 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "inquiry_date",
+  "inquiry_status",
+  "category",
+  "column_break_1",
+  "company",
+  "section_break_customer",
+  "inquiry_source",
+  "customer_name",
+  "column_break_2",
+  "contact_person",
+  "contact_display",
+  "contact_email",
+  "contact_mobile",
+  "customer_address",
+  "address_display",
+  "section_break_scenario",
+  "is_for_referred_party",
+  "referred_party_name",
+  "referred_party_contact_person",
+  "referred_party_email",
+  "column_break_3",
+  "referred_party_phone",
+  "referred_party_country",
+  "referred_party_address",
+  "new_customer",
+  "section_break_people",
+  "marketer",
+  "column_break_4",
+  "inquiry_officer",
+  "section_break_items",
+  "items",
+  "section_break_trade",
+  "shipment_mode",
+  "payment_mode",
+  "column_break_5",
+  "incoterm",
+  "section_break_value",
+  "estimated_value",
+  "column_break_6",
+  "currency",
+  "section_break_notes",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "options": "INQ-.YYYY.-",
+   "no_copy": 1,
+   "print_hide": 1,
+   "reqd": 1
+  },
+  {
+   "default": "Today",
+   "fieldname": "inquiry_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Inquiry Date",
+   "reqd": 1
+  },
+  {
+   "default": "Open",
+   "bold": 1,
+   "fieldname": "inquiry_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Open\nQuotation\nReplied\nConverted\nLost\nClosed",
+   "reqd": 1
+  },
+  {
+   "fieldname": "category",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Category",
+   "options": "Inquiry Category"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "eval:frappe.defaults.get_user_default(\"Company\")",
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "remember_last_selected_value": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_customer",
+   "fieldtype": "Section Break",
+   "label": "Customer Details"
+  },
+  {
+   "fieldname": "inquiry_source",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Customer (Inquiry Source)",
+   "options": "Customer",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "inquiry_source.customer_name",
+   "fieldname": "customer_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Customer Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "contact_person",
+   "fieldtype": "Link",
+   "label": "Contact Person",
+   "options": "Contact",
+   "permlevel": 1
+  },
+  {
+   "fieldname": "contact_display",
+   "fieldtype": "Small Text",
+   "label": "Contact",
+   "permlevel": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "contact_email",
+   "fieldtype": "Data",
+   "label": "Contact Email",
+   "options": "Email",
+   "permlevel": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "contact_mobile",
+   "fieldtype": "Data",
+   "label": "Contact Mobile",
+   "permlevel": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "customer_address",
+   "fieldtype": "Link",
+   "label": "Customer Address",
+   "options": "Address",
+   "permlevel": 1
+  },
+  {
+   "fieldname": "address_display",
+   "fieldtype": "Small Text",
+   "label": "Address",
+   "permlevel": 1,
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_scenario",
+   "fieldtype": "Section Break",
+   "label": "Inquiry Scenario"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_for_referred_party",
+   "fieldtype": "Check",
+   "label": "This inquiry is for a party referred by the customer (not the customer directly)"
+  },
+  {
+   "depends_on": "eval:doc.is_for_referred_party",
+   "fieldname": "referred_party_name",
+   "fieldtype": "Data",
+   "label": "Referred Party Name",
+   "mandatory_depends_on": "eval:doc.is_for_referred_party"
+  },
+  {
+   "depends_on": "eval:doc.is_for_referred_party",
+   "fieldname": "referred_party_contact_person",
+   "fieldtype": "Data",
+   "label": "Referred Party Contact Person"
+  },
+  {
+   "depends_on": "eval:doc.is_for_referred_party",
+   "fieldname": "referred_party_email",
+   "fieldtype": "Data",
+   "label": "Referred Party Email",
+   "options": "Email"
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.is_for_referred_party",
+   "fieldname": "referred_party_phone",
+   "fieldtype": "Data",
+   "label": "Referred Party Phone"
+  },
+  {
+   "depends_on": "eval:doc.is_for_referred_party",
+   "fieldname": "referred_party_country",
+   "fieldtype": "Link",
+   "label": "Referred Party Country",
+   "options": "Country"
+  },
+  {
+   "depends_on": "eval:doc.is_for_referred_party",
+   "fieldname": "referred_party_address",
+   "fieldtype": "Small Text",
+   "label": "Referred Party Address"
+  },
+  {
+   "depends_on": "eval:doc.is_for_referred_party",
+   "description": "Auto-filled once a Customer is created from the referred party details using the \"Create Customer\" button.",
+   "fieldname": "new_customer",
+   "fieldtype": "Link",
+   "label": "Customer Created From Referral",
+   "no_copy": 1,
+   "options": "Customer",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_people",
+   "fieldtype": "Section Break",
+   "label": "People"
+  },
+  {
+   "description": "Employees with the Marketer role only. Auto-set to the current user when a Marketer creates a new Inquiry.",
+   "fieldname": "marketer",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Marketer",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "column_break_4",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "__user",
+   "fieldname": "inquiry_officer",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Inquiry Officer",
+   "options": "User"
+  },
+  {
+   "fieldname": "section_break_items",
+   "fieldtype": "Section Break",
+   "label": "Items"
+  },
+  {
+   "fieldname": "items",
+   "fieldtype": "Table",
+   "label": "Items",
+   "options": "Inquiry Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_trade",
+   "fieldtype": "Section Break",
+   "label": "Trade & Shipment Terms"
+  },
+  {
+   "fieldname": "shipment_mode",
+   "fieldtype": "Link",
+   "label": "Mode of Shipment",
+   "options": "Inquiry Shipment Mode"
+  },
+  {
+   "fieldname": "payment_mode",
+   "fieldtype": "Link",
+   "label": "Mode of Payment",
+   "options": "Inquiry Payment Mode"
+  },
+  {
+   "fieldname": "column_break_5",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "incoterm",
+   "fieldtype": "Link",
+   "label": "Incoterm",
+   "options": "Inquiry Incoterm"
+  },
+  {
+   "fieldname": "section_break_value",
+   "fieldtype": "Section Break",
+   "label": "Estimated Value"
+  },
+  {
+   "fieldname": "estimated_value",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Estimated Value",
+   "options": "currency"
+  },
+  {
+   "fieldname": "column_break_6",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "eval:frappe.defaults.get_global_default(\"currency\")",
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_notes",
+   "fieldtype": "Section Break",
+   "label": "Additional Information"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Text",
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "module": "Smart App",
+ "name": "Inquiry",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "permlevel": 1,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Inquiry Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "permlevel": 1,
+   "read": 1,
+   "role": "Inquiry Manager",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Inquiry Officer",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Marketer",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "search_fields": "customer_name,inquiry_status,marketer",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "customer_name",
+ "track_changes": 1
+}

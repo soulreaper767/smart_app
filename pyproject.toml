@@ -1,0 +1,19 @@
+[project]
+name = "smart_app"
+authors = [
+    { name = "Smart Chem", email = "admin@smartchem.local" }
+]
+description = "Inquiry management and trading workflow automation, built on ERPNext v15."
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = []
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.bench.dev-dependencies]
+
+[tool.flit.module]
+name = "smart_app"

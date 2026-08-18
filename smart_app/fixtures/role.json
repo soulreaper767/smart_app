@@ -1,0 +1,23 @@
+[
+ {
+  "doctype": "Role",
+  "name": "Inquiry Manager",
+  "role_name": "Inquiry Manager",
+  "desk_access": 1,
+  "disabled": 0
+ },
+ {
+  "doctype": "Role",
+  "name": "Inquiry Officer",
+  "role_name": "Inquiry Officer",
+  "desk_access": 1,
+  "disabled": 0
+ },
+ {
+  "doctype": "Role",
+  "name": "Marketer",
+  "role_name": "Marketer",
+  "desk_access": 1,
+  "disabled": 0
+ }
+]

@@ -1,0 +1,12 @@
+include MANIFEST.in
+include license.txt
+include *.json
+recursive-include smart_app *.json
+recursive-include smart_app *.md
+recursive-include smart_app *.txt
+recursive-include smart_app *.csv
+recursive-include smart_app *.html
+recursive-include smart_app *.css
+recursive-include smart_app *.js
+recursive-include smart_app *.py
+recursive-exclude smart_app *.pyc
