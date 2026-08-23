@@ -210,6 +210,7 @@ def setup():
 	run_step(setup_quotation_integration, "quotation get-items-from + create-rfq integration")
 	run_step(setup_test_users, "commercial test users")
 	run_step(setup_email_branding, "email footer branding")
+	run_step(setup_email_templates, "RFQ email template")
 
 	frappe.db.commit()
 	frappe.clear_cache()
@@ -338,6 +339,7 @@ def grant_commercial_access():
 		"Purchase Taxes and Charges Template",
 		"Terms and Conditions",
 		"Address",
+		"User",  # Commercial Manager needs this to search for a Commercial Officer to assign
 	)
 	for role in ("Commercial Officer", "Commercial Manager"):
 		for doctype in reference_data:
@@ -1415,3 +1417,36 @@ def setup_email_branding():
 
 	if changed:
 		settings.save(ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
+# Email Template: a reusable, editable format for the RFQ supplier message
+# (Request for Quotation's own message_for_supplier field), rather than
+# every Commercial Officer writing that email from scratch each time.
+# Edit its wording any time from Settings > Email > Email Template.
+# ---------------------------------------------------------------------------
+
+RFQ_EMAIL_TEMPLATE_NAME = "Request for Quotation - Supplier Message"
+
+RFQ_EMAIL_TEMPLATE_SUBJECT = "Request for Quotation - {{ doc.name }}"
+
+RFQ_EMAIL_TEMPLATE_BODY = """
+<p>Dear Sir/Madam,</p>
+<p>We would like to request your best quotation for the items listed below.
+Please share your price, lead time, and payment terms at your earliest
+convenience.</p>
+<p>Thank you,<br>{{ doc.company }}</p>
+""".strip()
+
+
+def setup_email_templates():
+	if frappe.db.exists("Email Template", RFQ_EMAIL_TEMPLATE_NAME):
+		return
+	frappe.get_doc(
+		{
+			"doctype": "Email Template",
+			"name": RFQ_EMAIL_TEMPLATE_NAME,
+			"subject": RFQ_EMAIL_TEMPLATE_SUBJECT,
+			"response": RFQ_EMAIL_TEMPLATE_BODY,
+		}
+	).insert(ignore_permissions=True)

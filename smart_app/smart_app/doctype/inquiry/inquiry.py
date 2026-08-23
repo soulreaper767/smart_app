@@ -147,6 +147,26 @@ def get_marketers(doctype, txt, searchfield, start, page_len, filters):
 
 
 @frappe.whitelist()
+def get_commercial_officers(doctype, txt, searchfield, start, page_len, filters):
+	"""Link-field query: only Users with the Commercial Officer role -- used
+	by the commercial_officer field so a Commercial Manager assigning it is
+	only ever offered actual Commercial Officers, not any arbitrary user."""
+	return frappe.db.sql(
+		"""
+		select u.name, u.full_name
+		from `tabUser` u
+		inner join `tabHas Role` hr on hr.parent = u.name and hr.parenttype = 'User'
+		where hr.role = 'Commercial Officer'
+			and u.enabled = 1
+			and (u.name like %(txt)s or u.full_name like %(txt)s)
+		order by u.full_name
+		limit %(page_len)s offset %(start)s
+		""",
+		{"txt": f"%{txt}%", "start": start, "page_len": page_len},
+	)
+
+
+@frappe.whitelist()
 def create_customer_from_referred_party(inquiry_name):
 	"""Create a new Customer from the referred-party details captured on an Inquiry."""
 	doc = frappe.get_doc("Inquiry", inquiry_name)
@@ -305,6 +325,13 @@ def create_request_for_quotation(quotation_name):
 				"send_email": 1 if email else 0,
 			},
 		)
+
+	from smart_app.install import RFQ_EMAIL_TEMPLATE_NAME
+
+	if frappe.db.exists("Email Template", RFQ_EMAIL_TEMPLATE_NAME):
+		rfq.email_template = RFQ_EMAIL_TEMPLATE_NAME
+		if hasattr(rfq, "set_data_for_supplier"):
+			rfq.set_data_for_supplier()
 
 	rfq.insert(ignore_permissions=True, ignore_mandatory=True)
 

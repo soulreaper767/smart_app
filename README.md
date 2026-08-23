@@ -214,8 +214,11 @@ The **Smart App** workspace ships with:
   `inquiry_officer` field has `ignore_user_permissions` set specifically so
   this restriction never also filters by *that* unrelated field.
 - Both roles are granted `select+read` on Item, Company, Currency, Customer,
-  Contact, Address, UOM, Purchase Order, and the Sales/Purchase Taxes and
-  Terms templates Quotation's own controller commonly touches, plus full
+  Contact, Address, UOM, Purchase Order, User (Commercial Manager needs this
+  to search for a Commercial Officer to assign — the `commercial_officer`
+  field itself is further restricted by a `get_commercial_officers` query to
+  only offer actual Commercial Officer role holders), and the Sales/Purchase
+  Taxes and Terms templates Quotation's own controller commonly touches, plus full
   `select+read+write+create+submit` on **Quotation**, **Request for
   Quotation**, and **Supplier Quotation** (so a phone/email supplier reply
   can be logged manually, not just accepted via the RFQ portal) — none of
@@ -291,7 +294,7 @@ in `inquiry.py` — mirror
 supplier/contact lookup pattern from ERPNext's own
 `request_for_quotation.py`, respectively.
 
-## Email footer branding
+## Email formats & footer branding
 
 `setup_email_branding` disables Frappe/ERPNext's generic "Sent via ERPNext"
 outgoing-email footer (`System Settings.disable_standard_email_footer`) and
@@ -300,6 +303,15 @@ edited — this app has no way to know your company's real name/address, so
 it deliberately does not fabricate one. Update it yourself in **System
 Settings > Email**. Left alone entirely if you've already customised
 `email_footer_address` before installing.
+
+`setup_email_templates` creates one editable **Email Template** — "Request
+for Quotation - Supplier Message" — with a generic RFQ subject/body.
+`create_request_for_quotation` sets it as the RFQ's own `email_template`
+field and calls the RFQ's own `set_data_for_supplier()` method (core
+ERPNext's real mechanism for this — Request for Quotation already has an
+`email_template` Link field for exactly this purpose), so every RFQ starts
+with a ready-to-send message instead of a blank one. Edit its wording any
+time from **Settings > Email > Email Template**.
 
 ## Installation
 

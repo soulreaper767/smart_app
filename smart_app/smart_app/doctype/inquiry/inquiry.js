@@ -6,6 +6,9 @@ frappe.ui.form.on("Inquiry", {
 		frm.set_query("marketer", function () {
 			return { query: "smart_app.smart_app.doctype.inquiry.inquiry.get_marketers" };
 		});
+		frm.set_query("commercial_officer", function () {
+			return { query: "smart_app.smart_app.doctype.inquiry.inquiry.get_commercial_officers" };
+		});
 	},
 
 	onload: function (frm) {
