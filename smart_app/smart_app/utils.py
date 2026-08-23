@@ -91,6 +91,76 @@ def sync_marketer_user_permission_for_user(doc, method=None):
 		sync_marketer_permission_for_employee(employee)
 
 
+COMMERCIAL_STATUS_ORDER = ["Unassigned", "Assigned", "Quotation Created", "RFQ Created", "RFQ Sent"]
+
+
+def sync_commercial_officer_user_permission(doc, method=None):
+	"""User.on_update: a Commercial Officer's `commercial_officer` value on
+	Inquiry is a direct Link to User (not via Employee like Marketer), so a
+	single standing User Permission — scoped to the Inquiry doctype only via
+	`applicable_for`, exactly like the Marketer one — is enough to restrict
+	them to Inquiries assigned to themselves. Inquiry's own `inquiry_officer`
+	field has `ignore_user_permissions` set specifically so this doesn't
+	also filter by that unrelated field."""
+	existing = frappe.db.get_value(
+		"User Permission",
+		{"user": doc.name, "allow": "User", "for_value": doc.name, "applicable_for": APPLICABLE_FOR},
+		"name",
+	)
+	has_role = "Commercial Officer" in [r.role for r in doc.get("roles")]
+
+	if has_role and not existing:
+		frappe.get_doc(
+			{
+				"doctype": "User Permission",
+				"user": doc.name,
+				"allow": "User",
+				"for_value": doc.name,
+				"applicable_for": APPLICABLE_FOR,
+				"apply_to_all_doctypes": 0,
+			}
+		).insert(ignore_permissions=True)
+	elif not has_role and existing:
+		frappe.delete_doc("User Permission", existing, ignore_permissions=True)
+
+
+def advance_inquiry_commercial_status(inquiry_name, new_status):
+	"""Only ever moves commercial_status forward (Unassigned -> Assigned ->
+	Quotation Created -> RFQ Created -> RFQ Sent), never backward — e.g. a
+	second Quotation created after an RFQ has already gone out shouldn't
+	reset the status to "Quotation Created"."""
+	if not inquiry_name:
+		return
+
+	current_status = frappe.db.get_value("Inquiry", inquiry_name, "commercial_status")
+	if current_status is None:
+		return
+
+	try:
+		is_forward = COMMERCIAL_STATUS_ORDER.index(new_status) > COMMERCIAL_STATUS_ORDER.index(
+			current_status
+		)
+	except ValueError:
+		return
+
+	if is_forward:
+		frappe.db.set_value("Inquiry", inquiry_name, "commercial_status", new_status)
+
+
+def update_inquiry_on_quotation_created(doc, method=None):
+	"""Quotation.after_insert: advance the source Inquiry's commercial_status."""
+	if doc.get("inquiry"):
+		advance_inquiry_commercial_status(doc.inquiry, "Quotation Created")
+
+
+def update_inquiry_on_rfq_submit(doc, method=None):
+	"""Request for Quotation.on_submit: advance the source Inquiry's
+	commercial_status once the RFQ is actually submitted (not just drafted),
+	since submission is the precondition for send_supplier_emails to work."""
+	if doc.get("inquiry"):
+		advance_inquiry_commercial_status(doc.inquiry, "RFQ Sent")
+
+
 def sync_marketer_permission_for_employee(employee_name):
 	"""Ensure a Marketer only ever sees/edits Inquiries where they are the
 	assigned Marketer. This is done with a standard Frappe User Permission,

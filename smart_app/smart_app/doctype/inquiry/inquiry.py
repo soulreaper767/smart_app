@@ -14,6 +14,7 @@ class Inquiry(Document):
 		self.set_marketer_from_user()
 		self.enforce_marketer_restriction()
 		self.pull_customer_contact_details()
+		self.sync_commercial_status()
 
 	def before_insert(self):
 		self.set_marketer_from_user()
@@ -66,6 +67,17 @@ class Inquiry(Document):
 		for key, value in details.items():
 			if not self.get(key):
 				self.set(key, value)
+
+	def sync_commercial_status(self):
+		"""Once a Commercial Manager assigns commercial_officer on a submitted
+		Inquiry, flip commercial_status from Unassigned to Assigned. Later
+		stages (Quotation Created / RFQ Created / RFQ Sent) are advanced
+		elsewhere, from Quotation/Request for Quotation doc events (see
+		smart_app.smart_app.utils), never walked backwards here."""
+		if self.commercial_officer and self.commercial_status == "Unassigned":
+			self.commercial_status = "Assigned"
+		elif not self.commercial_officer and self.commercial_status == "Assigned":
+			self.commercial_status = "Unassigned"
 
 
 def get_employee_for_user(user):
@@ -178,22 +190,14 @@ def make_quotation(source_name, target_doc=None):
 	"""Mirrors erpnext.crm.doctype.opportunity.opportunity.make_quotation --
 	called from the "Get Items From" > "Inquiry" button added to the core
 	Quotation form via a Client Script (see setup_quotation_integration in
-	install.py). Only Inquiries with inquiry_status "Quotation" are offered
-	as a source, via that button's get_query_filters."""
+	install.py). Only Inquiries assigned to the current Commercial Officer
+	(and submitted) are offered as a source, via that button's
+	get_query_filters."""
 
 	def set_missing_values(source, target):
-		from erpnext.setup.utils import get_exchange_rate
-
 		quotation = frappe.get_doc(target)
 		quotation.quotation_to = "Customer"
 		quotation.party_name = source.inquiry_source
-
-		company_currency = frappe.get_cached_value("Company", quotation.company, "default_currency")
-		if quotation.currency and quotation.currency != company_currency:
-			quotation.conversion_rate = get_exchange_rate(
-				quotation.currency, company_currency, quotation.transaction_date, args="for_selling"
-			)
-
 		quotation.run_method("set_missing_values")
 		quotation.run_method("calculate_taxes_and_totals")
 
@@ -209,7 +213,6 @@ def make_quotation(source_name, target_doc=None):
 				"doctype": "Quotation",
 				"field_map": {
 					"company": "company",
-					"currency": "currency",
 					"name": "inquiry",
 				},
 			},
@@ -225,3 +228,87 @@ def make_quotation(source_name, target_doc=None):
 	)
 
 	return doclist
+
+
+@frappe.whitelist()
+def create_request_for_quotation(quotation_name):
+	"""Builds a draft Request for Quotation from a Quotation's items,
+	aggregating every supplier of every item (Item.supplier_items — an item
+	commonly has several, trader and manufacturer alike, and all of them are
+	pulled in so the RFQ can go out to multiple suppliers at once).
+
+	Left as a draft for deliberate human review: this only prepares the RFQ
+	(items + supplier/contact/email rows) -- submitting it and clicking
+	"Send Supplier Emails" (both native Request for Quotation actions) is a
+	separate, explicit step for whoever is generating it.
+
+	Explicitly role-gated (not just relying on the button's client-side
+	`frappe.model.can_create` check) since the RFQ itself is inserted with
+	ignore_permissions=True below."""
+	if not frappe.has_permission("Request for Quotation", "create"):
+		frappe.throw(
+			_("You do not have permission to create a Request for Quotation."), frappe.PermissionError
+		)
+
+	quotation = frappe.get_doc("Quotation", quotation_name)
+	quotation.check_permission("read")
+
+	if not quotation.items:
+		frappe.throw(_("This Quotation has no items to request a quotation for."))
+
+	rfq = frappe.new_doc("Request for Quotation")
+	rfq.company = quotation.company
+	rfq.transaction_date = frappe.utils.today()
+	if frappe.get_meta("Request for Quotation").has_field("inquiry"):
+		rfq.inquiry = quotation.get("inquiry")
+
+	suppliers_seen = set()
+	for row in quotation.items:
+		if not row.item_code:
+			continue
+
+		stock_uom = frappe.db.get_value("Item", row.item_code, "stock_uom")
+		rfq.append(
+			"items",
+			{
+				"item_code": row.item_code,
+				"qty": row.qty,
+				"schedule_date": frappe.utils.add_days(frappe.utils.today(), 7),
+				"uom": stock_uom,
+				"stock_uom": stock_uom,
+				"conversion_factor": 1,
+			},
+		)
+
+		for supplier in frappe.get_all(
+			"Item Supplier", filters={"parent": row.item_code}, pluck="supplier"
+		):
+			suppliers_seen.add(supplier)
+
+	if not suppliers_seen:
+		frappe.throw(
+			_(
+				"None of the items in this Quotation have a linked Supplier yet. "
+				"Add suppliers under the Item's own \"Supplier Items\" table first."
+			)
+		)
+
+	for supplier in suppliers_seen:
+		contact_name = get_default_contact("Supplier", supplier)
+		email = frappe.db.get_value("Contact", contact_name, "email_id") if contact_name else None
+		rfq.append(
+			"suppliers",
+			{
+				"supplier": supplier,
+				"contact": contact_name,
+				"email_id": email,
+				"send_email": 1 if email else 0,
+			},
+		)
+
+	rfq.insert(ignore_permissions=True, ignore_mandatory=True)
+
+	if quotation.get("inquiry"):
+		frappe.db.set_value("Inquiry", quotation.inquiry, "commercial_status", "RFQ Created")
+
+	return rfq.name

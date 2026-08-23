@@ -8,7 +8,7 @@ dashboards, KPIs, kanban and reports.
 ## Phase 1 scope
 
 - **Inquiry** doctype (naming series `INQ-.YYYY.-`, `track_changes` versioning,
-  a `Workflow` for its status field, submittable-free draft-style editing)
+  a `Workflow` for its status field, now **submittable** — see Phase 2)
 - **Inquiry Item** child table (Item + Quantity only — no rates/values)
 - Four manager-editable master lists: **Inquiry Shipment Mode**,
   **Inquiry Payment Mode**, **Inquiry Incoterm**, **Inquiry Category**
@@ -19,13 +19,41 @@ dashboards, KPIs, kanban and reports.
   list, KPIs, charts) plus a shortcut card added to the default **Home**
   workspace, and every other workspace hidden for users whose roles are
   entirely Inquiry-related (see below)
-- A **Kanban Board**, a **Dashboard**, 4 **Dashboard Charts**, 4 **Number
+- A **Kanban Board**, a **Dashboard**, 3 **Dashboard Charts**, 3 **Number
   Cards (KPIs)**, 2 **Query Reports**, and 1 **Print Format**
 - Everything above is created automatically on `bench install-app` (and kept
   in sync on every `bench migrate`) — no manual setup screens required.
 
-Commission automation is intentionally **out of scope for Phase 1** and will
-be layered on in a later phase, once the base Inquiry flow is confirmed.
+Commission automation for Marketers is intentionally still **out of scope**
+and will be layered on in a later phase, once Phase 2's Commercial pipeline
+is confirmed. `estimated_value`/`currency` were removed from Inquiry (were
+in Phase 1, not needed) — `cleanup_retired_artifacts` in `install.py`
+removes the chart/card that were built on them too, on any site that
+already had them.
+
+## Phase 2 scope: the Commercial team pipeline
+
+Once an Inquiry is **submitted**, it hands off from the Marketer/Inquiry
+Officer side to a separate Commercial team:
+
+1. A **Commercial Manager** sees every submitted Inquiry (assigned and
+   unassigned) and assigns a **Commercial Officer** to each one.
+2. That Commercial Officer generates a **Quotation** from it (core
+   ERPNext's own "Get Items From" mechanism, extended to Inquiry).
+3. From the Quotation, they generate a **Request for Quotation** draft —
+   auto-populated with every supplier of every item involved (an item
+   commonly has several, trader and manufacturer alike) — for review,
+   submission, and sending to suppliers (both native RFQ actions).
+4. Supplier replies come back as **Supplier Quotation** documents (via the
+   RFQ portal, or logged manually), comparable side-by-side with ERPNext's
+   own **Supplier Quotation Comparison** report, alongside **Item-wise
+   Purchase History** for last-buying context (supplier, date, rate) — both
+   core ERPNext reports, just given access, not rebuilt.
+
+New in this phase: **Commercial Manager** / **Commercial Officer** roles, a
+test login for each, `commercial_officer` + `commercial_status` fields on
+Inquiry, a Commercial overview (KPIs + Kanban + report), and email-footer
+branding. All covered in detail further down.
 
 ## Doctype: Inquiry
 
@@ -42,9 +70,11 @@ be layered on in a later phase, once the base Inquiry flow is confirmed.
 | `is_for_referred_party` + referred party fields | when checked, capture a new party's details; a **Create Customer** button appears to turn them into a real Customer |
 | `marketer` | Link → Employee, restricted by query to employees whose linked User has the **Marketer** role; auto-set when a Marketer creates a new Inquiry |
 | `inquiry_officer` | Link → User, defaults to the current user |
-| `items` | Table → Inquiry Item (Item + Quantity) — used later to request Supplier Quotations |
+| `items` | Table → Inquiry Item (Item + Quantity) — feeds the Quotation/RFQ pipeline below |
 | `shipment_mode` / `payment_mode` / `incoterm` | Links to the three manager-editable master lists |
-| `estimated_value` + `currency` | for pipeline-value KPIs/reports |
+| `amended_from` | standard field for a submittable doctype |
+| `commercial_officer` | Link → User, `allow_on_submit` — set by Commercial Manager once submitted; restricted by query to Commercial Officer role holders |
+| `commercial_status` | Unassigned / Assigned / Quotation Created / RFQ Created / RFQ Sent — read-only, advanced automatically as the Commercial pipeline progresses, never manually edited |
 | `notes` | free text |
 
 ## Roles & permissions
@@ -161,24 +191,115 @@ The **Smart App** workspace ships with:
   ships with, organised into **Inquiry** (the Inquiry doctype itself),
   **Masters** (all four master lists), and **Reports** (both Query
   Reports) cards.
+- A **Commercial Team** section: the Commercial Pipeline Kanban, the
+  Commercial Assignment Overview report, Quotation/Request for
+  Quotation/Supplier Quotation lists, and the two core purchase-history/
+  comparison reports (see Phase 2 below).
 
-## Quotation integration
+## Commercial team roles & permissions
 
-Once an Inquiry's status is **Quotation**, it becomes selectable from the
-core **Quotation** form's own "Get Items From" dropdown — click **Get Items
-From → Inquiry**, and only Inquiries currently in the Quotation status are
-offered (via `get_query_filters`), matching how ERPNext already does this
-for Opportunity → Quotation.
+- **Commercial Manager** — reads/writes every submitted Inquiry (not scoped
+  to any one officer), so they can see totals and assign
+  `commercial_officer`. Deliberately **not** part of the Inquiry-role set
+  (Inquiry Manager/Officer/Marketer/Inquiry User) — they're a separate,
+  downstream team, so the focused-sidebar Module Profile above never
+  applies to them, and they keep normal access to Selling/Buying.
+- **Commercial Officer** — reads only the Inquiries assigned to *them*.
+  Enforced the same way as Marketer's restriction, but simpler: since
+  `commercial_officer` links directly to **User** (not via Employee), a
+  single standing **User Permission** (`allow: User, for_value: <self>,
+  applicable_for: Inquiry`) is kept in sync whenever a User is saved
+  (`sync_commercial_officer_user_permission` in `utils.py`) — auto-created
+  when they hold the role, auto-removed when they don't. Inquiry's own
+  `inquiry_officer` field has `ignore_user_permissions` set specifically so
+  this restriction never also filters by *that* unrelated field.
+- Both roles are granted `select+read` on Item, Company, Currency, Customer,
+  Contact, Address, UOM, Purchase Order, and the Sales/Purchase Taxes and
+  Terms templates Quotation's own controller commonly touches, plus full
+  `select+read+write+create+submit` on **Quotation**, **Request for
+  Quotation**, and **Supplier Quotation** (so a phone/email supplier reply
+  can be logged manually, not just accepted via the RFQ portal) — none of
+  which any role in this app had before. **Item-wise Purchase History** and
+  **Supplier Quotation Comparison** (see below) had their own restrictive
+  role lists extended too, rather than being rebuilt.
 
-This is done without touching any ERPNext source file: `setup_quotation_
-integration` in `install.py` adds a **Client Script** on the Quotation
-doctype (the button + `erpnext.utils.map_current_doc` call, mirroring
-ERPNext's own Opportunity button exactly) and a **Custom Field**
-`inquiry` (Link → Inquiry) on Quotation for traceability back to the
-source. The server-side mapping — `make_quotation` in `inquiry.py` — pulls
-the Customer, Company, Currency and every Inquiry Item (by Item and Qty)
-into the new Quotation, mirroring
-`erpnext.crm.doctype.opportunity.opportunity.make_quotation`.
+### Test logins
+
+One test user per Commercial role, created by `setup_test_users` —
+**test credentials only**, meant for verifying each role's permissions
+end-to-end, not for production use:
+
+| Email | Password | Role |
+|---|---|---|
+| `commercialmanager@smartchem.com` | `test123` | Commercial Manager |
+| `commercialofficer@smartchem.com` | `test123` | Commercial Officer |
+
+The password is only ever set on first creation — a later migrate never
+resets it, so changing it afterwards sticks. Disable or reset these before
+any real deployment.
+
+### Commercial overview (`setup_commercial_overview` in `install.py`)
+
+- **Number Cards**: Submitted Inquiries, Unassigned Inquiries, Assigned
+  Inquiries (all `docstatus = 1`, the "unassigned" one filtered by
+  `commercial_officer is not set`).
+- **Kanban Board** "Commercial Pipeline", grouped by `commercial_status`.
+- **Query Report** "Commercial Assignment Overview" — every submitted
+  Inquiry with its Commercial Officer and status.
+
+All three (plus shortcuts to Quotation/RFQ/Supplier Quotation lists and the
+two core reports below) live under a **Commercial Team** section on the
+Smart App workspace.
+
+## Quotation → Request for Quotation pipeline
+
+Once an Inquiry is **submitted** and assigned, it becomes selectable from
+the core **Quotation** form's own "Get Items From" dropdown — click **Get
+Items From → Inquiry**, filtered to Inquiries assigned to the current
+Commercial Officer (`commercial_officer` = session user, `docstatus = 1`).
+This mirrors how ERPNext already does the same thing for Opportunity →
+Quotation.
+
+From that Quotation, a second button — **Create → Request for Quotation**
+— builds a *draft* RFQ: every item carried over (Item, Qty, a 7-day
+schedule date, UOM/Stock UOM from the Item master), and every supplier of
+every one of those items (`Item.supplier_items` — deliberately *all* of
+them, since an item commonly has multiple suppliers, trader and
+manufacturer alike, and the RFQ should reach every one) added to the
+Suppliers table with their default Contact's email. It's left as a draft
+deliberately: submitting it and clicking "Send Supplier Emails" (both
+native Request for Quotation actions, which themselves require the site's
+Portal Settings to have Request for Quotation enabled) are explicit human
+steps, not automated — this reaches external suppliers, so a review
+checkpoint stays in the loop.
+
+`commercial_status` advances automatically and only ever forward (never
+backward, e.g. a second Quotation created after an RFQ already went out
+won't reset it): "Quotation Created" on the Quotation's `after_insert`,
+"RFQ Created" once `create_request_for_quotation` builds the draft, "RFQ
+Sent" on the RFQ's `on_submit` (submission being the actual precondition
+for `send_supplier_emails` to work).
+
+None of this touches any ERPNext source file: `setup_quotation_integration`
+in `install.py` adds one **Client Script** on Quotation (both buttons, the
+second mirroring ERPNext's own Opportunity → Quotation button exactly via
+`erpnext.utils.map_current_doc`) and a **Custom Field** `inquiry` (Link →
+Inquiry) on both Quotation and Request for Quotation for traceability. The
+server-side mappers — `make_quotation` and `create_request_for_quotation`
+in `inquiry.py` — mirror
+`erpnext.crm.doctype.opportunity.opportunity.make_quotation` and the RFQ
+supplier/contact lookup pattern from ERPNext's own
+`request_for_quotation.py`, respectively.
+
+## Email footer branding
+
+`setup_email_branding` disables Frappe/ERPNext's generic "Sent via ERPNext"
+outgoing-email footer (`System Settings.disable_standard_email_footer`) and
+sets a placeholder `email_footer_address` that's obviously meant to be
+edited — this app has no way to know your company's real name/address, so
+it deliberately does not fabricate one. Update it yourself in **System
+Settings > Email**. Left alone entirely if you've already customised
+`email_footer_address` before installing.
 
 ## Installation
 
@@ -195,8 +316,11 @@ bench restart
 
 After install, assign the **Inquiry Manager**, **Inquiry Officer** and
 **Marketer** roles to the relevant Users (Marketers should also have an
-Employee record linked via `user_id`). Open **Smart App** from the sidebar
-(or the shortcut card added to the Home workspace) to start using it.
+Employee record linked via `user_id`). For the Commercial team, either
+assign **Commercial Manager**/**Commercial Officer** to real Users, or log
+in as the test users created automatically (see Test logins above). Open
+**Smart App** from the sidebar (or the shortcut card added to the Home
+workspace) to start using it.
 
 ### If a setup step logs a warning
 
@@ -220,6 +344,4 @@ want to force it outside of a migrate.
 
 ## Roadmap
 
-- Phase 2: commission automation for Marketers based on converted Inquiries.
-- Phase 2: Supplier Quotation request automation from the Inquiry `items`
-  table (per-item RFQ to suppliers of that item).
+- Phase 3: commission automation for Marketers based on converted Inquiries.

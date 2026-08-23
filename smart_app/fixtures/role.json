@@ -26,5 +26,19 @@
   "role_name": "Inquiry User",
   "desk_access": 1,
   "disabled": 0
+ },
+ {
+  "doctype": "Role",
+  "name": "Commercial Manager",
+  "role_name": "Commercial Manager",
+  "desk_access": 1,
+  "disabled": 0
+ },
+ {
+  "doctype": "Role",
+  "name": "Commercial Officer",
+  "role_name": "Commercial Officer",
+  "desk_access": 1,
+  "disabled": 0
  }
 ]

@@ -28,16 +28,6 @@ frappe.ui.form.on("Inquiry", {
 		}
 	},
 
-	company: function (frm) {
-		if (frm.doc.company && !frm.doc.currency) {
-			frappe.db.get_value("Company", frm.doc.company, "default_currency").then((r) => {
-				if (r.message && r.message.default_currency) {
-					frm.set_value("currency", r.message.default_currency);
-				}
-			});
-		}
-	},
-
 	refresh: function (frm) {
 		frm.trigger("set_status_indicator");
 		frm.trigger("show_create_customer_button");

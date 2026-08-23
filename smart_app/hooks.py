@@ -14,7 +14,18 @@ fixtures = [
 	{
 		"doctype": "Role",
 		"filters": [
-			["name", "in", ["Inquiry Manager", "Inquiry Officer", "Marketer", "Inquiry User"]]
+			[
+				"name",
+				"in",
+				[
+					"Inquiry Manager",
+					"Inquiry Officer",
+					"Marketer",
+					"Inquiry User",
+					"Commercial Manager",
+					"Commercial Officer",
+				],
+			]
 		],
 	}
 ]
@@ -38,6 +49,15 @@ doc_events = {
 			"smart_app.smart_app.utils.sync_inquiry_user_role",
 			"smart_app.smart_app.utils.sync_module_profile",
 		],
-		"on_update": "smart_app.smart_app.utils.sync_marketer_user_permission_for_user",
+		"on_update": [
+			"smart_app.smart_app.utils.sync_marketer_user_permission_for_user",
+			"smart_app.smart_app.utils.sync_commercial_officer_user_permission",
+		],
+	},
+	"Quotation": {
+		"after_insert": "smart_app.smart_app.utils.update_inquiry_on_quotation_created",
+	},
+	"Request for Quotation": {
+		"on_submit": "smart_app.smart_app.utils.update_inquiry_on_rfq_submit",
 	},
 }

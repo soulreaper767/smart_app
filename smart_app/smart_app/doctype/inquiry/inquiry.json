@@ -5,6 +5,7 @@
  "creation": "2026-01-01 00:00:00",
  "doctype": "DocType",
  "engine": "InnoDB",
+ "is_submittable": 1,
  "field_order": [
   "naming_series",
   "inquiry_date",
@@ -12,6 +13,7 @@
   "category",
   "column_break_1",
   "company",
+  "amended_from",
   "section_break_customer",
   "inquiry_source",
   "customer_name",
@@ -43,10 +45,10 @@
   "payment_mode",
   "column_break_5",
   "incoterm",
-  "section_break_value",
-  "estimated_value",
-  "column_break_6",
-  "currency",
+  "section_break_commercial",
+  "commercial_officer",
+  "column_break_7",
+  "commercial_status",
   "section_break_notes",
   "notes"
  ],
@@ -99,6 +101,15 @@
    "options": "Company",
    "remember_last_selected_value": 1,
    "reqd": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Inquiry",
+   "print_hide": 1,
+   "read_only": 1
   },
   {
    "fieldname": "section_break_customer",
@@ -256,6 +267,7 @@
    "default": "__user",
    "fieldname": "inquiry_officer",
    "fieldtype": "Link",
+   "ignore_user_permissions": 1,
    "in_standard_filter": 1,
    "label": "Inquiry Officer",
    "options": "User"
@@ -300,26 +312,35 @@
    "options": "Inquiry Incoterm"
   },
   {
-   "fieldname": "section_break_value",
+   "fieldname": "section_break_commercial",
    "fieldtype": "Section Break",
-   "label": "Estimated Value"
+   "label": "Commercial Assignment",
+   "description": "Filled in once this Inquiry is submitted and handed off to the Commercial team."
   },
   {
-   "fieldname": "estimated_value",
-   "fieldtype": "Currency",
+   "allow_on_submit": 1,
+   "description": "Set by Commercial Manager once this submitted Inquiry is picked up for quotation/RFQ processing. Users with the Commercial Officer role only.",
+   "fieldname": "commercial_officer",
+   "fieldtype": "Link",
    "in_list_view": 1,
-   "label": "Estimated Value",
-   "options": "currency"
+   "in_standard_filter": 1,
+   "label": "Commercial Officer",
+   "options": "User"
   },
   {
-   "fieldname": "column_break_6",
+   "fieldname": "column_break_7",
    "fieldtype": "Column Break"
   },
   {
-   "fieldname": "currency",
-   "fieldtype": "Link",
-   "label": "Currency",
-   "options": "Currency"
+   "allow_on_submit": 1,
+   "default": "Unassigned",
+   "fieldname": "commercial_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Commercial Status",
+   "options": "Unassigned\nAssigned\nQuotation Created\nRFQ Created\nRFQ Sent",
+   "read_only": 1
   },
   {
    "collapsible": 1,
@@ -341,6 +362,8 @@
  "owner": "Administrator",
  "permissions": [
   {
+   "amend": 1,
+   "cancel": 1,
    "create": 1,
    "delete": 1,
    "email": 1,
@@ -350,6 +373,7 @@
    "report": 1,
    "role": "System Manager",
    "share": 1,
+   "submit": 1,
    "write": 1
   },
   {
@@ -359,6 +383,8 @@
    "write": 1
   },
   {
+   "amend": 1,
+   "cancel": 1,
    "create": 1,
    "delete": 1,
    "email": 1,
@@ -368,6 +394,7 @@
    "report": 1,
    "role": "Inquiry Manager",
    "share": 1,
+   "submit": 1,
    "write": 1
   },
   {
@@ -385,6 +412,7 @@
    "report": 1,
    "role": "Inquiry Officer",
    "share": 1,
+   "submit": 1,
    "write": 1
   },
   {
@@ -394,7 +422,24 @@
    "read": 1,
    "role": "Marketer",
    "share": 1,
+   "submit": 1,
    "write": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Commercial Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Commercial Officer"
   }
  ],
  "search_fields": "customer_name,inquiry_status,marketer",

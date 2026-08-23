@@ -19,15 +19,21 @@ CHART_NAMES = [
 	"Inquiries by Status",
 	"Inquiries by Marketer",
 	"Inquiries by Category",
-	"Estimated Value Trend",
 ]
 
 CARD_NAMES = [
 	"Open Inquiries",
 	"Converted Inquiries",
 	"Lost Inquiries",
-	"Open Pipeline Value",
 ]
+
+COMMERCIAL_CARD_NAMES = [
+	"Submitted Inquiries",
+	"Unassigned Inquiries",
+	"Assigned Inquiries",
+]
+
+COMMERCIAL_STATUSES = ["Unassigned", "Assigned", "Quotation Created", "RFQ Created", "RFQ Sent"]
 
 WORKFLOW_ACTIONS = [
 	"Send for Quotation",
@@ -130,6 +136,50 @@ SHORTCUTS = [
 	},
 ]
 
+COMMERCIAL_SHORTCUTS = [
+	{
+		"label": "Commercial Pipeline",
+		"type": "DocType",
+		"link_to": "Inquiry",
+		"doc_view": "Kanban",
+		"kanban_board": "Commercial Pipeline",
+		"color": "#3B82F6",
+	},
+	{
+		"label": "Commercial Assignment Overview",
+		"type": "Report",
+		"link_to": "Commercial Assignment Overview",
+		"color": "#3B82F6",
+	},
+	{"label": "Quotations", "type": "DocType", "link_to": "Quotation", "doc_view": "List", "color": "#22C55E"},
+	{
+		"label": "Requests for Quotation",
+		"type": "DocType",
+		"link_to": "Request for Quotation",
+		"doc_view": "List",
+		"color": "#22C55E",
+	},
+	{
+		"label": "Supplier Quotations",
+		"type": "DocType",
+		"link_to": "Supplier Quotation",
+		"doc_view": "List",
+		"color": "#22C55E",
+	},
+	{
+		"label": "Item Purchase History",
+		"type": "Report",
+		"link_to": "Item-wise Purchase History",
+		"color": "#F97316",
+	},
+	{
+		"label": "Supplier Quotation Comparison",
+		"type": "Report",
+		"link_to": "Supplier Quotation Comparison",
+		"color": "#F97316",
+	},
+]
+
 
 def after_install():
 	setup()
@@ -140,13 +190,16 @@ def after_migrate():
 
 
 def setup():
+	run_step(cleanup_retired_artifacts, "cleanup of retired estimated_value chart/card")
 	run_step(ensure_roles, "roles")
 	run_step(grant_master_data_access, "customer/item/employee access")
+	run_step(grant_commercial_access, "commercial team access")
 	run_step(seed_master_data, "master data")
 	run_step(setup_workflow, "workflow")
 	run_step(setup_kanban_board, "kanban board")
 	run_step(setup_dashboard_charts, "dashboard charts")
 	run_step(setup_number_cards, "number cards")
+	run_step(setup_commercial_overview, "commercial overview (cards + kanban + report)")
 	run_step(setup_dashboard, "dashboard")
 	run_step(setup_reports, "reports")
 	run_step(setup_print_format, "print format")
@@ -154,7 +207,9 @@ def setup():
 	run_step(add_home_workspace_shortcut, "home workspace shortcut")
 	run_step(grant_inquiry_manager_workflow_access, "inquiry manager workflow access")
 	run_step(setup_module_profile, "restricted module profile")
-	run_step(setup_quotation_integration, "quotation get-items-from integration")
+	run_step(setup_quotation_integration, "quotation get-items-from + create-rfq integration")
+	run_step(setup_test_users, "commercial test users")
+	run_step(setup_email_branding, "email footer branding")
 
 	frappe.db.commit()
 	frappe.clear_cache()
@@ -180,7 +235,19 @@ def ensure_roles():
 	# holds Inquiry Manager / Inquiry Officer / Marketer, see utils.py) used only
 	# to satisfy the Inquiry Workflow's mandatory single-role "allow_edit" slot
 	# for the active states — it carries no DocType permissions of its own.
-	for role in ("Inquiry Manager", "Inquiry Officer", "Marketer", "Inquiry User"):
+	#
+	# Commercial Manager / Commercial Officer are a separate, downstream team:
+	# they only ever see Inquiries once submitted (see Inquiry's permissions
+	# and utils.sync_commercial_officer_user_permission), so they're
+	# deliberately NOT part of the Inquiry-role set above.
+	for role in (
+		"Inquiry Manager",
+		"Inquiry Officer",
+		"Marketer",
+		"Inquiry User",
+		"Commercial Manager",
+		"Commercial Officer",
+	):
 		if not frappe.db.exists("Role", role):
 			frappe.get_doc({"doctype": "Role", "role_name": role, "desk_access": 1}).insert(
 				ignore_permissions=True
@@ -246,6 +313,138 @@ def grant_master_data_access():
 	_grant_custom_docperm("Item", "Inquiry Manager", select=1, read=1, create=1)
 	_grant_custom_docperm("Contact", "Inquiry Manager", select=1, read=1)
 	_grant_custom_docperm("Address", "Inquiry Manager", select=1, read=1)
+
+
+# ---------------------------------------------------------------------------
+# Commercial team (Commercial Manager / Commercial Officer): they take a
+# submitted Inquiry, generate a Quotation from it, then a Request for
+# Quotation to the suppliers of its items. None of the core doctypes that
+# flow touches (Quotation, Request for Quotation, Supplier, Supplier
+# Quotation, plus Item/Company/Currency/Customer/Contact which Quotation and
+# RFQ themselves need) are granted to any role in this app by default.
+# ---------------------------------------------------------------------------
+
+
+def grant_commercial_access():
+	reference_data = (
+		"Item",
+		"Company",
+		"Currency",
+		"Customer",
+		"Contact",
+		"Purchase Order",
+		"UOM",
+		"Sales Taxes and Charges Template",
+		"Purchase Taxes and Charges Template",
+		"Terms and Conditions",
+		"Address",
+	)
+	for role in ("Commercial Officer", "Commercial Manager"):
+		for doctype in reference_data:
+			_grant_custom_docperm(doctype, role, select=1, read=1)
+
+		_grant_custom_docperm("Supplier", role, select=1, read=1)
+
+		# Commercial Officer generates these; Commercial Manager gets the
+		# same access for oversight (reassigning, reviewing, following up).
+		for doctype in ("Quotation", "Request for Quotation"):
+			_grant_custom_docperm(
+				doctype, role, select=1, read=1, write=1, create=1, submit=1, print=1, email=1,
+				report=1, export=1,
+			)
+
+		# Supplier replies are usually submitted via the RFQ portal, but a
+		# Commercial Officer can also log a phone/email reply manually.
+		_grant_custom_docperm(
+			"Supplier Quotation", role, select=1, read=1, write=1, create=1, print=1, email=1,
+			report=1, export=1,
+		)
+
+	_grant_core_report_access()
+
+
+def _grant_core_report_access():
+	"""Item-wise Purchase History and Supplier Quotation Comparison are core
+	ERPNext reports ("see the last buying — supplier, when, at what rate"
+	and "a comparative statement when replies are received against an RFQ")
+	-- both already exist, so just extend their own `roles` restriction
+	list rather than rebuilding either report from scratch."""
+	for report_name in ("Item-wise Purchase History", "Supplier Quotation Comparison"):
+		if not frappe.db.exists("Report", report_name):
+			continue
+		report = frappe.get_doc("Report", report_name)
+		existing_roles = {r.role for r in report.get("roles")}
+		changed = False
+		for role in ("Commercial Officer", "Commercial Manager"):
+			if role not in existing_roles:
+				report.append("roles", {"role": role})
+				changed = True
+		if changed:
+			report.save(ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
+# Retired artifacts: estimated_value/currency were removed from Inquiry, so
+# the chart/card built on them are cleaned up too. Safe to run every
+# migrate — becomes a no-op once cleaned up on a given site.
+# ---------------------------------------------------------------------------
+
+
+def cleanup_retired_artifacts():
+	retired_chart = "Estimated Value Trend"
+	retired_card = "Open Pipeline Value"
+
+	if frappe.db.exists("Dashboard", "Inquiry Dashboard"):
+		dashboard = frappe.get_doc("Dashboard", "Inquiry Dashboard")
+		changed = False
+
+		charts = [c for c in dashboard.get("charts") if c.chart != retired_chart]
+		if len(charts) != len(dashboard.get("charts")):
+			dashboard.set("charts", charts)
+			changed = True
+
+		cards = [c for c in dashboard.get("cards") if c.card != retired_card]
+		if len(cards) != len(dashboard.get("cards")):
+			dashboard.set("cards", cards)
+			changed = True
+
+		if changed:
+			dashboard.save(ignore_permissions=True)
+
+	if frappe.db.exists("Workspace", "Smart App"):
+		workspace = frappe.get_doc("Workspace", "Smart App")
+		changed = False
+
+		charts = [c for c in workspace.get("charts") if c.chart_name != retired_chart]
+		if len(charts) != len(workspace.get("charts")):
+			workspace.set("charts", charts)
+			changed = True
+
+		cards = [c for c in workspace.get("number_cards") if c.number_card_name != retired_card]
+		if len(cards) != len(workspace.get("number_cards")):
+			workspace.set("number_cards", cards)
+			changed = True
+
+		content = json.loads(workspace.content or "[]")
+		new_content = [
+			b
+			for b in content
+			if not (b.get("type") == "chart" and b.get("data", {}).get("chart_name") == retired_chart)
+			and not (
+				b.get("type") == "number_card" and b.get("data", {}).get("number_card_name") == retired_card
+			)
+		]
+		if len(new_content) != len(content):
+			workspace.content = json.dumps(new_content)
+			changed = True
+
+		if changed:
+			workspace.save(ignore_permissions=True)
+
+	if frappe.db.exists("Dashboard Chart", retired_chart):
+		frappe.delete_doc("Dashboard Chart", retired_chart, ignore_permissions=True, force=True)
+	if frappe.db.exists("Number Card", retired_card):
+		frappe.delete_doc("Number Card", retired_card, ignore_permissions=True, force=True)
 
 
 # ---------------------------------------------------------------------------
@@ -424,15 +623,6 @@ def setup_dashboard_charts():
 			"group_by_based_on": "category",
 			"type": "Pie",
 		},
-		{
-			"chart_name": "Estimated Value Trend",
-			"chart_type": "Sum",
-			"value_based_on": "estimated_value",
-			"type": "Line",
-			"timeseries": 1,
-			"time_interval": "Monthly",
-			"timespan": "Last Year",
-		},
 	]
 	for c in charts:
 		if frappe.db.exists("Dashboard Chart", c["chart_name"]):
@@ -477,28 +667,75 @@ def setup_number_cards():
 			"function": "Count",
 			"filters_json": [["Inquiry", "inquiry_status", "=", "Lost"]],
 		},
-		{
-			"label": "Open Pipeline Value",
-			"function": "Sum",
-			"aggregate_function_based_on": "estimated_value",
-			"filters_json": [["Inquiry", "inquiry_status", "not in", ["Lost", "Closed"]]],
-		},
 	]
 	for c in cards:
-		if frappe.db.exists("Number Card", c["label"]):
-			continue
-		card = frappe.new_doc("Number Card")
-		card.label = c["label"]
-		card.document_type = "Inquiry"
-		card.type = "Document Type"
-		card.function = c["function"]
-		card.aggregate_function_based_on = c.get("aggregate_function_based_on")
-		card.filters_json = json.dumps(c["filters_json"])
-		card.is_public = 1
-		card.show_percentage_stats = 1
-		card.stats_time_interval = "Monthly"
-		card.module = MODULE
-		card.insert(ignore_permissions=True)
+		_create_number_card(c["label"], c["function"], c["filters_json"])
+
+
+def _create_number_card(label, function, filters, aggregate_function_based_on=None):
+	if frappe.db.exists("Number Card", label):
+		return
+	card = frappe.new_doc("Number Card")
+	card.label = label
+	card.document_type = "Inquiry"
+	card.type = "Document Type"
+	card.function = function
+	card.aggregate_function_based_on = aggregate_function_based_on
+	card.filters_json = json.dumps(filters)
+	card.is_public = 1
+	card.show_percentage_stats = 1
+	card.stats_time_interval = "Monthly"
+	card.module = MODULE
+	card.insert(ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
+# Commercial overview: how a Commercial Manager sees total/assigned/
+# unassigned submitted Inquiries, and tracks each one through the Quotation
+# / RFQ pipeline.
+# ---------------------------------------------------------------------------
+
+
+def setup_commercial_overview():
+	_create_number_card(
+		"Submitted Inquiries", "Count", [["Inquiry", "docstatus", "=", 1]]
+	)
+	_create_number_card(
+		"Unassigned Inquiries",
+		"Count",
+		[["Inquiry", "docstatus", "=", 1], ["Inquiry", "commercial_officer", "is", "not set"]],
+	)
+	_create_number_card(
+		"Assigned Inquiries",
+		"Count",
+		[["Inquiry", "docstatus", "=", 1], ["Inquiry", "commercial_officer", "is", "set"]],
+	)
+
+	if not frappe.db.exists("Kanban Board", "Commercial Pipeline"):
+		board = frappe.new_doc("Kanban Board")
+		board.kanban_board_name = "Commercial Pipeline"
+		board.reference_doctype = "Inquiry"
+		board.field_name = "commercial_status"
+		for status in COMMERCIAL_STATUSES:
+			board.append("columns", {"column_name": status})
+		board.insert(ignore_permissions=True)
+
+	_create_query_report(
+		"Commercial Assignment Overview",
+		"""
+		select
+			i.name as "Inquiry:Link/Inquiry:130",
+			i.customer_name as "Customer:Data:180",
+			i.category as "Category:Link/Inquiry Category:150",
+			ifnull(i.commercial_officer, '') as "Commercial Officer:Link/User:200",
+			i.commercial_status as "Commercial Status:Data:150",
+			i.inquiry_date as "Inquiry Date:Date:110"
+		from `tabInquiry` i
+		where i.docstatus = 1
+		order by i.commercial_officer is null desc, i.inquiry_date desc
+		""".strip(),
+		roles=("Commercial Manager", "Commercial Officer", "System Manager"),
+	)
 
 
 # ---------------------------------------------------------------------------
@@ -535,12 +772,11 @@ def setup_reports():
 			count(i.name) as "Total Inquiries:Int:130",
 			sum(case when i.inquiry_status = 'Converted' then 1 else 0 end) as "Converted:Int:110",
 			sum(case when i.inquiry_status = 'Lost' then 1 else 0 end) as "Lost:Int:100",
-			sum(case when i.inquiry_status not in ('Converted', 'Lost', 'Closed') then 1 else 0 end) as "In Progress:Int:120",
-			sum(ifnull(i.estimated_value, 0)) as "Total Estimated Value:Currency:180"
+			sum(case when i.inquiry_status not in ('Converted', 'Lost', 'Closed') then 1 else 0 end) as "In Progress:Int:120"
 		from `tabInquiry` i
 		left join `tabEmployee` e on e.name = i.marketer
 		group by i.marketer
-		order by sum(ifnull(i.estimated_value, 0)) desc
+		order by count(i.name) desc
 		""".strip(),
 	)
 
@@ -550,8 +786,7 @@ def setup_reports():
 		select
 			i.inquiry_status as "Status:Data:130",
 			ic.category_name as "Category:Data:220",
-			count(i.name) as "Total Inquiries:Int:130",
-			sum(ifnull(i.estimated_value, 0)) as "Total Estimated Value:Currency:180"
+			count(i.name) as "Total Inquiries:Int:130"
 		from `tabInquiry` i
 		left join `tabInquiry Category` ic on ic.name = i.category
 		group by i.inquiry_status, i.category
@@ -560,29 +795,48 @@ def setup_reports():
 	)
 
 
-def _create_query_report(name, query):
+def _create_query_report(name, query, roles=("Inquiry Manager", "Inquiry Officer", "Marketer", "System Manager")):
+	"""Reconciles the query/roles on every run, not just on first create, so
+	an updated SQL definition (e.g. dropping a removed field) self-heals on
+	the next migrate instead of leaving the stale version in place."""
 	if frappe.db.exists("Report", name):
-		return
-	report = frappe.new_doc("Report")
-	report.report_name = name
-	report.ref_doctype = "Inquiry"
-	report.report_type = "Query Report"
-	report.is_standard = "No"
-	report.module = MODULE
+		report = frappe.get_doc("Report", name)
+	else:
+		report = frappe.new_doc("Report")
+		report.report_name = name
+		report.ref_doctype = "Inquiry"
+		report.report_type = "Query Report"
+		report.is_standard = "No"
+		report.module = MODULE
+
+	changed = report.is_new() or report.query != query
 	report.query = query
-	for role in ("Inquiry Manager", "Inquiry Officer", "Marketer", "System Manager"):
-		report.append("roles", {"role": role})
-	report.insert(ignore_permissions=True)
+
+	existing_roles = {r.role for r in report.get("roles")}
+	for role in roles:
+		if role not in existing_roles:
+			report.append("roles", {"role": role})
+			changed = True
+
+	if report.is_new():
+		report.insert(ignore_permissions=True)
+	elif changed:
+		report.save(ignore_permissions=True)
 
 
 # ---------------------------------------------------------------------------
-# Quotation integration: "Get Items From" > Inquiry (only Inquiries with
-# status "Quotation" are offered), plus a traceability field back to it.
-# Quotation is a core ERPNext doctype, so this is done non-invasively via a
-# Custom Field and a Client Script rather than editing ERPNext's own files.
+# Commercial pipeline integration on core doctypes: Quotation's own
+# "Get Items From" > Inquiry (only Inquiries assigned to the current
+# Commercial Officer are offered), a "Create Request for Quotation" button
+# that aggregates every supplier of every item in the Quotation (Item's own
+# "Supplier Items" table — an Item commonly has several, trader and
+# manufacturer alike, and all of them are pulled in), plus traceability
+# fields back to the source Inquiry. Both Quotation and Request for
+# Quotation are core ERPNext doctypes, so this is done non-invasively via
+# Custom Fields and a Client Script rather than editing ERPNext's own files.
 # ---------------------------------------------------------------------------
 
-QUOTATION_GET_ITEMS_FROM_INQUIRY_JS = """
+QUOTATION_CLIENT_SCRIPT_JS = """
 frappe.ui.form.on("Quotation", {
 	refresh: function (frm) {
 		if (frm.doc.docstatus === 0 && frappe.model.can_read("Inquiry")) {
@@ -603,8 +857,8 @@ frappe.ui.form.on("Quotation", {
 							},
 						],
 						get_query_filters: {
-							inquiry_status: "Quotation",
-							company: frm.doc.company,
+							commercial_officer: frappe.session.user,
+							docstatus: 1,
 						},
 					});
 				},
@@ -612,42 +866,74 @@ frappe.ui.form.on("Quotation", {
 				"btn-default"
 			);
 		}
+
+		if (!frm.is_new() && frm.doc.items && frm.doc.items.length && frappe.model.can_create("Request for Quotation")) {
+			frm.add_custom_button(__("Request for Quotation"), function () {
+				frappe.call({
+					method: "smart_app.smart_app.doctype.inquiry.inquiry.create_request_for_quotation",
+					args: { quotation_name: frm.doc.name },
+					freeze: true,
+					freeze_message: __("Preparing Request for Quotation..."),
+					callback: function (r) {
+						if (r.message) {
+							frappe.set_route("Form", "Request for Quotation", r.message);
+						}
+					},
+				});
+			});
+		}
 	},
 });
 """.strip()
 
 
 def setup_quotation_integration():
-	if not frappe.db.exists("DocType", "Quotation"):
+	if frappe.db.exists("DocType", "Quotation"):
+		_add_custom_field("Quotation", "inquiry", "Inquiry", "Inquiry", insert_after="party_name")
+		_upsert_client_script(
+			"Inquiry - Commercial Pipeline (Quotation)", "Quotation", QUOTATION_CLIENT_SCRIPT_JS
+		)
+
+	if frappe.db.exists("DocType", "Request for Quotation"):
+		_add_custom_field(
+			"Request for Quotation", "inquiry", "Inquiry", "Inquiry", insert_after="company"
+		)
+
+
+def _add_custom_field(dt, fieldname, label, options, insert_after, fieldtype="Link"):
+	name = f"{dt}-{fieldname}"
+	if frappe.db.exists("Custom Field", name):
 		return
+	frappe.get_doc(
+		{
+			"doctype": "Custom Field",
+			"dt": dt,
+			"fieldname": fieldname,
+			"label": label,
+			"fieldtype": fieldtype,
+			"options": options,
+			"insert_after": insert_after,
+			"allow_on_submit": 1,
+		}
+	).insert(ignore_permissions=True)
 
-	if not frappe.db.exists("Custom Field", "Quotation-inquiry"):
-		frappe.get_doc(
-			{
-				"doctype": "Custom Field",
-				"dt": "Quotation",
-				"fieldname": "inquiry",
-				"label": "Inquiry",
-				"fieldtype": "Link",
-				"options": "Inquiry",
-				"insert_after": "party_name",
-				"allow_on_submit": 1,
-			}
-		).insert(ignore_permissions=True)
 
-	if frappe.db.exists("Client Script", "Inquiry - Get Items From (Quotation)"):
-		script = frappe.get_doc("Client Script", "Inquiry - Get Items From (Quotation)")
+def _upsert_client_script(name, dt, script_body, view="Form"):
+	if frappe.db.exists("Client Script", name):
+		script = frappe.get_doc("Client Script", name)
 	else:
 		script = frappe.new_doc("Client Script")
-		script.name = "Inquiry - Get Items From (Quotation)"
-		script.dt = "Quotation"
-		script.view = "Form"
+		script.name = name
+		script.dt = dt
+		script.view = view
 
-	script.script = QUOTATION_GET_ITEMS_FROM_INQUIRY_JS
+	changed = script.is_new() or script.script != script_body or not script.enabled
+	script.script = script_body
 	script.enabled = 1
+
 	if script.is_new():
 		script.insert(ignore_permissions=True)
-	else:
+	elif changed:
 		script.save(ignore_permissions=True)
 
 
@@ -657,9 +943,6 @@ def setup_quotation_integration():
 
 
 def setup_print_format():
-	if frappe.db.exists("Print Format", "Inquiry Standard"):
-		return
-
 	html = """
 <div class="print-format">
 	<h2>{{ doc.name }}</h2>
@@ -678,8 +961,7 @@ def setup_print_format():
 		</tr>
 		<tr>
 			<td><b>Incoterm</b></td><td>{{ doc.incoterm or "" }}</td>
-			<td><b>Estimated Value</b></td>
-			<td>{{ frappe.utils.fmt_money(doc.estimated_value, currency=doc.currency) if doc.estimated_value else "" }}</td>
+			<td><b>Commercial Officer</b></td><td>{{ doc.commercial_officer or "" }}</td>
 		</tr>
 	</table>
 	<h4>Items</h4>
@@ -704,15 +986,24 @@ def setup_print_format():
 </div>
 """.strip()
 
-	pf = frappe.new_doc("Print Format")
-	pf.name = "Inquiry Standard"
-	pf.doc_type = "Inquiry"
-	pf.module = MODULE
-	pf.print_format_type = "Jinja"
-	pf.standard = "No"
-	pf.disabled = 0
+	if frappe.db.exists("Print Format", "Inquiry Standard"):
+		pf = frappe.get_doc("Print Format", "Inquiry Standard")
+	else:
+		pf = frappe.new_doc("Print Format")
+		pf.name = "Inquiry Standard"
+		pf.doc_type = "Inquiry"
+		pf.module = MODULE
+		pf.print_format_type = "Jinja"
+		pf.standard = "No"
+		pf.disabled = 0
+
+	changed = pf.is_new() or pf.html != html
 	pf.html = html
-	pf.insert(ignore_permissions=True)
+
+	if pf.is_new():
+		pf.insert(ignore_permissions=True)
+	elif changed:
+		pf.save(ignore_permissions=True)
 
 
 # ---------------------------------------------------------------------------
@@ -767,6 +1058,7 @@ def setup_workspace():
 
 	_add_workspace_visuals(workspace)
 	_add_workspace_links(workspace)
+	_add_commercial_section(workspace)
 
 
 def _build_base_workspace():
@@ -830,7 +1122,7 @@ def _add_workspace_visuals(workspace):
 			"data": {"text": '<span class="h5">Key Numbers</span>', "col": 12},
 		}
 	)
-	for card in CARD_NAMES:
+	for card in CARD_NAMES + COMMERCIAL_CARD_NAMES:
 		if card not in existing_cards:
 			workspace.append("number_cards", {"number_card_name": card, "label": card})
 		content.append(
@@ -910,6 +1202,39 @@ def _add_workspace_links(workspace):
 				"data": {"card_name": card["label"], "col": 4},
 			}
 		)
+
+	workspace.content = json.dumps(content)
+	workspace.save(ignore_permissions=True)
+
+
+def _add_commercial_section(workspace):
+	"""Shortcuts for the Commercial team's pipeline: assignment overview,
+	Quotation/RFQ/Supplier Quotation lists, and the two core ERPNext reports
+	for purchase history and RFQ-reply comparison. Same idempotent
+	"add if missing" pattern as the rest of the workspace."""
+	workspace.reload()
+	content = json.loads(workspace.content or "[]")
+	existing_shortcuts = {row.label for row in workspace.get("shortcuts")}
+
+	if not any(b.get("type") == "header" and "Commercial Team" in b.get("data", {}).get("text", "") for b in content):
+		content.append(
+			{
+				"id": frappe.generate_hash(length=10),
+				"type": "header",
+				"data": {"text": '<span class="h5">Commercial Team</span>', "col": 12},
+			}
+		)
+
+	for s in COMMERCIAL_SHORTCUTS:
+		if s["label"] not in existing_shortcuts:
+			workspace.append("shortcuts", s)
+			content.append(
+				{
+					"id": frappe.generate_hash(length=10),
+					"type": "shortcut",
+					"data": {"shortcut_name": s["label"], "col": 3},
+				}
+			)
 
 	workspace.content = json.dumps(content)
 	workspace.save(ignore_permissions=True)
@@ -1017,3 +1342,70 @@ def setup_module_profile():
 		profile.insert(ignore_permissions=True)
 	else:
 		profile.save(ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
+# Test users: one login per Commercial role, so permissions can be verified
+# end-to-end. TEST CREDENTIALS ONLY — the password is only ever set on
+# first creation (never reset on a later migrate, so changing it afterwards
+# sticks), and these should be disabled, removed, or given a real password
+# before any real deployment.
+# ---------------------------------------------------------------------------
+
+TEST_USERS = [
+	{
+		"email": "commercialmanager@smartchem.com",
+		"full_name": "Commercial Manager (Test)",
+		"role": "Commercial Manager",
+	},
+	{
+		"email": "commercialofficer@smartchem.com",
+		"full_name": "Commercial Officer (Test)",
+		"role": "Commercial Officer",
+	},
+]
+
+TEST_USER_PASSWORD = "test123"
+
+
+def setup_test_users():
+	for u in TEST_USERS:
+		if frappe.db.exists("User", u["email"]):
+			continue
+		user = frappe.new_doc("User")
+		user.email = u["email"]
+		user.first_name = u["full_name"]
+		user.send_welcome_email = 0
+		user.user_type = "System User"
+		user.new_password = TEST_USER_PASSWORD
+		user.append("roles", {"role": u["role"]})
+		user.insert(ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
+# Email branding: replace Frappe/ERPNext's generic footer on outgoing
+# emails (used by RFQ supplier emails, among everything else) with a
+# placeholder that's obviously meant to be edited — this app has no way to
+# know your company's real name/address, so it deliberately does not
+# fabricate one. Left alone if you've already customised
+# email_footer_address yourself.
+# ---------------------------------------------------------------------------
+
+
+def setup_email_branding():
+	settings = frappe.get_single("System Settings")
+	changed = False
+
+	if not settings.email_footer_address:
+		settings.email_footer_address = (
+			"Your Company Name — update this in System Settings > Email > "
+			"Email Footer Address"
+		)
+		changed = True
+
+	if not settings.disable_standard_email_footer:
+		settings.disable_standard_email_footer = 1
+		changed = True
+
+	if changed:
+		settings.save(ignore_permissions=True)
