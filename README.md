@@ -231,8 +231,8 @@ end-to-end, not for production use:
 
 | Email | Password | Role |
 |---|---|---|
-| `commercialmanager@smartchem.com` | `test123` | Commercial Manager |
-| `commercialofficer@smartchem.com` | `test123` | Commercial Officer |
+| `commercialmanager@smartchem.com` | `Test@12345` | Commercial Manager |
+| `commercialofficer@smartchem.com` | `Test@12345` | Commercial Officer |
 
 The password is only ever set on first creation — a later migrate never
 resets it, so changing it afterwards sticks. Disable or reset these before

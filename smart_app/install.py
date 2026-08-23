@@ -1365,7 +1365,12 @@ TEST_USERS = [
 	},
 ]
 
-TEST_USER_PASSWORD = "test123"
+# Longer/mixed-character than a bare "test123" specifically so this doesn't
+# get rejected by a site with System Settings > Security > "Enforce Password
+# Policy" turned on (Frappe scores password strength via zxcvbn and requires
+# a minimum score) -- also explicitly bypassed via ignore_password_policy
+# below, so this creates successfully regardless of that setting either way.
+TEST_USER_PASSWORD = "Test@12345"
 
 
 def setup_test_users():
@@ -1378,6 +1383,7 @@ def setup_test_users():
 		user.send_welcome_email = 0
 		user.user_type = "System User"
 		user.new_password = TEST_USER_PASSWORD
+		user.flags.ignore_password_policy = True
 		user.append("roles", {"role": u["role"]})
 		user.insert(ignore_permissions=True)
 
