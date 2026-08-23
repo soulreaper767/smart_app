@@ -61,7 +61,7 @@ branding. All covered in detail further down.
 |---|---|
 | `naming_series` | `INQ-.YYYY.-####` |
 | `inquiry_date` | defaults to today |
-| `inquiry_status` | Open / Quotation / Replied / Converted / Lost / Closed — driven by the **Inquiry Workflow**. Active states (Open/Quotation/Replied) are editable by Inquiry Officer, Marketer or Inquiry Manager; terminal states (Converted/Lost/Closed) are editable by Inquiry Manager only |
+| `inquiry_status` | Open / Quotation / Replied / Converted / Lost / Closed — driven by the **Inquiry Workflow**. Every state uses the same `allow_edit` role (the internal Inquiry User umbrella role — see below), so Inquiry Officer/Marketer/Inquiry Manager/Commercial Manager can all edit an Inquiry regardless of its current status; which specific *transitions* are allowed is still role-gated (only Marketer/Inquiry Manager can Convert, only Inquiry Manager can Close/Reopen) |
 | `category` | Link → Inquiry Category (NPD / Commercial, manager-editable) |
 | `company` | for multi-company setups |
 | `inquiry_source` | Link → Customer — quick-create a new Customer inline, just like any other Link |
@@ -101,10 +101,26 @@ branding. All covered in detail further down.
 - **Inquiry User** — an internal, non-user-facing umbrella role. It carries no
   DocType permissions of its own; it exists only because the Inquiry
   Workflow's per-state "who can edit while in this state" setting accepts a
-  single role, and Inquiry Officer/Marketer/Inquiry Manager are three
-  different roles. It's auto-granted to (and revoked from) any User who holds
-  one of those three roles, via a `validate` hook on User — you never assign
-  it by hand.
+  single role, and Inquiry Officer/Marketer/Inquiry Manager/Commercial
+  Manager are four different roles. It's auto-granted to (and revoked from)
+  any User who holds one of those four roles, via a `validate` hook on User
+  — you never assign it by hand. (Commercial Manager needs it too, since
+  they must be able to set `commercial_officer` regardless of what
+  `inquiry_status` the Inquiry happens to be in — this is intentionally a
+  *separate* trigger set from the one driving the restricted-sidebar Module
+  Profile below, so Commercial Manager never gets caught by that.)
+
+### Submitting an Inquiry
+
+Because the Inquiry Workflow is active, Frappe's own client-side workflow
+logic **hides the native Submit button** the moment any workflow transition
+is available for the current user — which is effectively always, since
+every non-terminal state has one. So there's a custom **Submit** button
+(`inquiry.js`) that calls the exact same `frm.savesubmit()` the native
+button itself would have called — it lives outside the toolbar slot the
+workflow JS hides, so it's unaffected. It only shows for a saved, unsaved-
+draft Inquiry, and only if the current role actually has `submit`
+permission (Inquiry Officer, Marketer, Inquiry Manager, System Manager).
 
 ### Access to every doctype Inquiry links to
 
@@ -191,10 +207,18 @@ The **Smart App** workspace ships with:
   ships with, organised into **Inquiry** (the Inquiry doctype itself),
   **Masters** (all four master lists), and **Reports** (both Query
   Reports) cards.
-- A **Commercial Team** section: the Commercial Pipeline Kanban, the
-  Commercial Assignment Overview report, Quotation/Request for
-  Quotation/Supplier Quotation lists, and the two core purchase-history/
-  comparison reports (see Phase 2 below).
+- A **Commercial Team** section: the Commercial Pipeline Kanban (filtered to
+  submitted Inquiries only), the Commercial Assignment Overview report,
+  Quotation/Request for Quotation/Supplier Quotation lists, and the two
+  core purchase-history/comparison reports (see Phase 2 below).
+
+Every `content.append()` that builds these blocks is guarded by
+`_has_content_block` — checking whether that exact header/shortcut/chart/
+card is already there before adding it — and `setup_workspace` runs
+`_dedupe_content_blocks` on load, since earlier versions of this file
+appended some of these unconditionally on every migrate, silently piling up
+duplicates each time it ran. That's now fixed and self-healing: the next
+migrate cleans up any duplication a site already accumulated.
 
 ## Commercial team roles & permissions
 

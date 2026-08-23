@@ -10,6 +10,12 @@ MODULE_PROFILE_NAME = "Inquiry Team"
 # Roles that don't count as "this user also needs access elsewhere" when
 # deciding whether to restrict their sidebar to just Smart App.
 NON_RESTRICTIVE_ROLES = {"All", "Guest", "Desk User", "Employee", UMBRELLA_ROLE} | INQUIRY_ROLES
+# Who needs the Inquiry User umbrella role (see sync_inquiry_user_role) --
+# deliberately a SEPARATE set from INQUIRY_ROLES, not a superset of it,
+# because INQUIRY_ROLES also drives sync_module_profile (restricted sidebar)
+# and auto_assign_marketer_role, and Commercial Manager must never trigger
+# either of those, only the workflow-edit gate below.
+INQUIRY_USER_ROLE_TRIGGERS = INQUIRY_ROLES | {"Commercial Manager"}
 
 
 def sync_module_profile(doc, method=None):
@@ -38,21 +44,24 @@ def sync_module_profile(doc, method=None):
 
 
 def sync_inquiry_user_role(doc, method=None):
-	"""User.validate: keep the internal "Inquiry User" umbrella role (used only
-	to satisfy the Inquiry Workflow's single-role `allow_edit` slot) in sync
-	with whether this user holds any of the three real Inquiry roles. Runs in
-	`validate` (not `on_update`) so the role list is fixed up as part of the
-	same save instead of triggering a second, recursive save."""
+	"""User.validate: keep the internal "Inquiry User" umbrella role (used
+	only to satisfy the Inquiry Workflow's single-role `allow_edit` slot) in
+	sync with whether this user needs it -- any of the three real Inquiry
+	roles, OR Commercial Manager (who must be able to edit an Inquiry -- to
+	set commercial_officer -- no matter what inquiry_status/workflow state
+	it's currently in). Runs in `validate` (not `on_update`) so the role
+	list is fixed up as part of the same save instead of triggering a
+	second, recursive save."""
 	if not frappe.db.exists("Role", UMBRELLA_ROLE):
 		return
 
 	current_roles = {r.role for r in doc.get("roles")}
-	has_inquiry_role = bool(current_roles & INQUIRY_ROLES)
+	needs_umbrella_role = bool(current_roles & INQUIRY_USER_ROLE_TRIGGERS)
 	has_umbrella_role = UMBRELLA_ROLE in current_roles
 
-	if has_inquiry_role and not has_umbrella_role:
+	if needs_umbrella_role and not has_umbrella_role:
 		doc.append("roles", {"role": UMBRELLA_ROLE})
-	elif has_umbrella_role and not has_inquiry_role:
+	elif has_umbrella_role and not needs_umbrella_role:
 		doc.set("roles", [r for r in doc.get("roles") if r.role != UMBRELLA_ROLE])
 
 

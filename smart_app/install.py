@@ -209,6 +209,7 @@ def setup():
 	run_step(setup_module_profile, "restricted module profile")
 	run_step(setup_quotation_integration, "quotation get-items-from + create-rfq integration")
 	run_step(setup_test_users, "commercial test users")
+	run_step(backfill_commercial_manager_inquiry_user_role, "backfill Inquiry User role for Commercial Manager")
 	run_step(setup_email_branding, "email footer branding")
 	run_step(setup_email_templates, "RFQ email template")
 
@@ -500,26 +501,25 @@ def _seed(doctype, fieldname, values):
 
 
 def setup_workflow():
+	"""Reconciles states/transitions on every run (not just create-once), so
+	a correction here (like the allow_edit unification below) self-heals on
+	an already-created Workflow instead of being stuck with whatever was set
+	the first time this ran."""
 	_ensure_workflow_masters()
-
-	if frappe.db.exists("Workflow", "Inquiry Workflow"):
-		return
 
 	all_roles = ["Inquiry Officer", "Marketer", "Inquiry Manager"]
 	manager_only = ["Inquiry Manager"]
 
-	# Only one role can be granted edit rights per state (core Frappe
-	# constraint), so the umbrella "Inquiry User" role (auto-synced onto
-	# anyone holding Inquiry Officer / Marketer / Inquiry Manager) covers the
-	# active states, while the terminal states are locked to managers only.
-	edit_role_by_state = {
-		"Open": "Inquiry User",
-		"Quotation": "Inquiry User",
-		"Replied": "Inquiry User",
-		"Converted": "Inquiry Manager",
-		"Lost": "Inquiry Manager",
-		"Closed": "Inquiry Manager",
-	}
+	# Every state uses the same "Inquiry User" umbrella role (auto-synced
+	# onto anyone holding Inquiry Officer/Marketer/Inquiry Manager, and onto
+	# Commercial Manager too -- see sync_inquiry_user_role in utils.py).
+	# States used to lock down Converted/Lost/Closed to Inquiry Manager only,
+	# but allow_edit applies to the WHOLE document, not just inquiry_status --
+	# that blocked Commercial Manager from ever setting commercial_officer
+	# once an Inquiry reached one of those statuses, which matters more than
+	# the extra strictness was worth. DocPerm-level and Permission Level 1
+	# restrictions still apply regardless of workflow state.
+	edit_role_by_state = {state: "Inquiry User" for state in STATUSES}
 
 	transitions = [
 		("Open", "Send for Quotation", "Quotation", all_roles),
@@ -534,33 +534,53 @@ def setup_workflow():
 		("Closed", "Reopen", "Open", manager_only),
 	]
 
-	workflow = frappe.new_doc("Workflow")
-	workflow.workflow_name = "Inquiry Workflow"
-	workflow.document_type = "Inquiry"
-	workflow.workflow_state_field = "inquiry_status"
-	workflow.is_active = 1
-	workflow.send_email_alert = 0
+	if frappe.db.exists("Workflow", "Inquiry Workflow"):
+		workflow = frappe.get_doc("Workflow", "Inquiry Workflow")
+	else:
+		workflow = frappe.new_doc("Workflow")
+		workflow.workflow_name = "Inquiry Workflow"
+		workflow.document_type = "Inquiry"
+		workflow.workflow_state_field = "inquiry_status"
+		workflow.is_active = 1
+		workflow.send_email_alert = 0
 
+	changed = workflow.is_new()
+
+	states_by_name = {s.state: s for s in workflow.get("states")}
 	for state in STATUSES:
-		workflow.append(
-			"states",
-			{"state": state, "doc_status": "0", "allow_edit": edit_role_by_state[state]},
-		)
+		if state in states_by_name:
+			row = states_by_name[state]
+			if row.allow_edit != edit_role_by_state[state] or row.doc_status != "0":
+				row.allow_edit = edit_role_by_state[state]
+				row.doc_status = "0"
+				changed = True
+		else:
+			workflow.append("states", {"state": state, "doc_status": "0", "allow_edit": edit_role_by_state[state]})
+			changed = True
 
+	existing_transitions = {
+		(t.state, t.action, t.next_state, t.allowed) for t in workflow.get("transitions")
+	}
 	for from_state, action, next_state, roles in transitions:
 		for role in roles:
-			workflow.append(
-				"transitions",
-				{
-					"state": from_state,
-					"action": action,
-					"next_state": next_state,
-					"allowed": role,
-					"allow_self_approval": 1,
-				},
-			)
+			key = (from_state, action, next_state, role)
+			if key not in existing_transitions:
+				workflow.append(
+					"transitions",
+					{
+						"state": from_state,
+						"action": action,
+						"next_state": next_state,
+						"allowed": role,
+						"allow_self_approval": 1,
+					},
+				)
+				changed = True
 
-	workflow.insert(ignore_permissions=True)
+	if workflow.is_new():
+		workflow.insert(ignore_permissions=True)
+	elif changed:
+		workflow.save(ignore_permissions=True)
 
 
 def _ensure_workflow_masters():
@@ -713,11 +733,21 @@ def setup_commercial_overview():
 		[["Inquiry", "docstatus", "=", 1], ["Inquiry", "commercial_officer", "is", "set"]],
 	)
 
-	if not frappe.db.exists("Kanban Board", "Commercial Pipeline"):
+	# Only submitted Inquiries belong on this board -- otherwise every draft
+	# (still "Unassigned" by default before it's even handed to Commercial)
+	# would clutter it too.
+	commercial_pipeline_filters = json.dumps([["Inquiry", "docstatus", "=", 1]])
+	if frappe.db.exists("Kanban Board", "Commercial Pipeline"):
+		board = frappe.get_doc("Kanban Board", "Commercial Pipeline")
+		if board.filters != commercial_pipeline_filters:
+			board.filters = commercial_pipeline_filters
+			board.save(ignore_permissions=True)
+	else:
 		board = frappe.new_doc("Kanban Board")
 		board.kanban_board_name = "Commercial Pipeline"
 		board.reference_doctype = "Inquiry"
 		board.field_name = "commercial_status"
+		board.filters = commercial_pipeline_filters
 		for status in COMMERCIAL_STATUSES:
 			board.append("columns", {"column_name": status})
 		board.insert(ignore_permissions=True)
@@ -965,6 +995,10 @@ def setup_print_format():
 			<td><b>Incoterm</b></td><td>{{ doc.incoterm or "" }}</td>
 			<td><b>Commercial Officer</b></td><td>{{ doc.commercial_officer or "" }}</td>
 		</tr>
+		<tr>
+			<td><b>Commercial Status</b></td><td>{{ doc.commercial_status or "" }}</td>
+			<td></td><td></td>
+		</tr>
 	</table>
 	<h4>Items</h4>
 	<table class="table table-bordered" style="width: 100%">
@@ -1110,48 +1144,86 @@ def _build_base_workspace():
 	return workspace
 
 
+def _has_content_block(content, block_type, **data_match):
+	"""Whether `content` already has a block of this type whose data matches
+	every key/value given -- used to guard every content.append() so
+	re-running setup_workspace() on each migrate doesn't pile up duplicate
+	headers/shortcuts/charts/cards every single time."""
+	for block in content:
+		if block.get("type") != block_type:
+			continue
+		data = block.get("data", {})
+		if all(data.get(k) == v for k, v in data_match.items()):
+			return True
+	return False
+
+
+def _dedupe_content_blocks(content):
+	"""One-time (but safe to re-run) cleanup for content arrays that already
+	accumulated duplicates from before content.append() calls were guarded --
+	keeps only the first occurrence of each (type, identifying-field) block."""
+	key_field_by_type = {
+		"header": "text",
+		"paragraph": "text",
+		"shortcut": "shortcut_name",
+		"chart": "chart_name",
+		"number_card": "number_card_name",
+		"card": "card_name",
+	}
+	seen = set()
+	deduped = []
+	for block in content:
+		btype = block.get("type")
+		data = block.get("data", {})
+		key_field = key_field_by_type.get(btype)
+		key = (btype, data.get(key_field)) if key_field else (btype, json.dumps(data, sort_keys=True))
+		if key in seen:
+			continue
+		seen.add(key)
+		deduped.append(block)
+	return deduped
+
+
 def _add_workspace_visuals(workspace):
 	workspace.reload()
-	content = json.loads(workspace.content or "[]")
+	content = _dedupe_content_blocks(json.loads(workspace.content or "[]"))
 
 	existing_cards = {row.number_card_name for row in workspace.get("number_cards")}
 	existing_charts = {row.chart_name for row in workspace.get("charts")}
 
-	content.append(
-		{
-			"id": frappe.generate_hash(length=10),
-			"type": "header",
-			"data": {"text": '<span class="h5">Key Numbers</span>', "col": 12},
-		}
-	)
+	key_numbers_header = '<span class="h5">Key Numbers</span>'
+	if not _has_content_block(content, "header", text=key_numbers_header):
+		content.append(
+			{"id": frappe.generate_hash(length=10), "type": "header", "data": {"text": key_numbers_header, "col": 12}}
+		)
 	for card in CARD_NAMES + COMMERCIAL_CARD_NAMES:
 		if card not in existing_cards:
 			workspace.append("number_cards", {"number_card_name": card, "label": card})
-		content.append(
-			{
-				"id": frappe.generate_hash(length=10),
-				"type": "number_card",
-				"data": {"number_card_name": card, "col": 3},
-			}
-		)
+		if not _has_content_block(content, "number_card", number_card_name=card):
+			content.append(
+				{
+					"id": frappe.generate_hash(length=10),
+					"type": "number_card",
+					"data": {"number_card_name": card, "col": 3},
+				}
+			)
 
-	content.append(
-		{
-			"id": frappe.generate_hash(length=10),
-			"type": "header",
-			"data": {"text": '<span class="h5">Charts</span>', "col": 12},
-		}
-	)
+	charts_header = '<span class="h5">Charts</span>'
+	if not _has_content_block(content, "header", text=charts_header):
+		content.append(
+			{"id": frappe.generate_hash(length=10), "type": "header", "data": {"text": charts_header, "col": 12}}
+		)
 	for chart in CHART_NAMES:
 		if chart not in existing_charts:
 			workspace.append("charts", {"chart_name": chart, "label": chart})
-		content.append(
-			{
-				"id": frappe.generate_hash(length=10),
-				"type": "chart",
-				"data": {"chart_name": chart, "col": 6},
-			}
-		)
+		if not _has_content_block(content, "chart", chart_name=chart):
+			content.append(
+				{
+					"id": frappe.generate_hash(length=10),
+					"type": "chart",
+					"data": {"chart_name": chart, "col": 6},
+				}
+			)
 
 	workspace.content = json.dumps(content)
 	workspace.save(ignore_permissions=True)
@@ -1164,16 +1236,14 @@ def _add_workspace_links(workspace):
 	it never clobbers anything an Inquiry Manager customised by hand via the
 	workspace editor."""
 	workspace.reload()
-	content = json.loads(workspace.content or "[]")
+	content = _dedupe_content_blocks(json.loads(workspace.content or "[]"))
 	existing_cards = {row.label for row in workspace.get("links") if row.type == "Card Break"}
 
-	content.append(
-		{
-			"id": frappe.generate_hash(length=10),
-			"type": "header",
-			"data": {"text": '<span class="h5">Links</span>', "col": 12},
-		}
-	)
+	links_header = '<span class="h5">Links</span>'
+	if not _has_content_block(content, "header", text=links_header):
+		content.append(
+			{"id": frappe.generate_hash(length=10), "type": "header", "data": {"text": links_header, "col": 12}}
+		)
 
 	for card in LINK_CARDS:
 		if card["label"] not in existing_cards:
@@ -1197,6 +1267,8 @@ def _add_workspace_links(workspace):
 						"is_query_report": link.get("is_query_report", 0),
 					},
 				)
+		if _has_content_block(content, "card", card_name=card["label"]):
+			continue
 		content.append(
 			{
 				"id": frappe.generate_hash(length=10),
@@ -1215,7 +1287,7 @@ def _add_commercial_section(workspace):
 	for purchase history and RFQ-reply comparison. Same idempotent
 	"add if missing" pattern as the rest of the workspace."""
 	workspace.reload()
-	content = json.loads(workspace.content or "[]")
+	content = _dedupe_content_blocks(json.loads(workspace.content or "[]"))
 	existing_shortcuts = {row.label for row in workspace.get("shortcuts")}
 
 	if not any(b.get("type") == "header" and "Commercial Team" in b.get("data", {}).get("text", "") for b in content):
@@ -1388,6 +1460,24 @@ def setup_test_users():
 		user.flags.ignore_password_policy = True
 		user.append("roles", {"role": u["role"]})
 		user.insert(ignore_permissions=True)
+
+
+def backfill_commercial_manager_inquiry_user_role():
+	"""sync_inquiry_user_role (utils.py) only fixes up a User's roles on that
+	User's own next save -- so a Commercial Manager created before Commercial
+	Manager was added to INQUIRY_USER_ROLE_TRIGGERS (or simply never edited
+	since) needs a one-time nudge. Re-saving triggers the same validate hook,
+	so this reuses that logic rather than duplicating it."""
+	if not frappe.db.exists("Role", "Inquiry User"):
+		return
+
+	commercial_managers = frappe.get_all(
+		"Has Role", filters={"role": "Commercial Manager", "parenttype": "User"}, pluck="parent"
+	)
+	for user_name in commercial_managers:
+		user = frappe.get_doc("User", user_name)
+		if "Inquiry User" not in [r.role for r in user.roles]:
+			user.save(ignore_permissions=True)
 
 
 # ---------------------------------------------------------------------------

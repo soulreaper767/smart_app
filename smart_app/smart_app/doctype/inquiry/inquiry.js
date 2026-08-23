@@ -34,6 +34,22 @@ frappe.ui.form.on("Inquiry", {
 	refresh: function (frm) {
 		frm.trigger("set_status_indicator");
 		frm.trigger("show_create_customer_button");
+		frm.trigger("show_submit_button");
+	},
+
+	show_submit_button: function (frm) {
+		// The Inquiry Workflow hides the native Submit button whenever any
+		// workflow transition is available (Frappe's own workflow.js hides
+		// btn_primary/btn_secondary as soon as one action is shown) -- which
+		// is effectively always, since every active state has an outgoing
+		// transition. A custom button lives outside that toolbar slot, so it
+		// is never touched by that hide-logic; frm.savesubmit() is the exact
+		// same call the native Submit button itself makes.
+		if (!frm.is_new() && frm.doc.docstatus === 0 && frappe.model.can_submit(frm.doctype)) {
+			frm.add_custom_button(__("Submit"), function () {
+				frm.savesubmit();
+			}).addClass("btn-primary");
+		}
 	},
 
 	set_status_indicator: function (frm) {
