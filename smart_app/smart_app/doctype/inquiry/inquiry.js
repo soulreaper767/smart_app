@@ -51,13 +51,16 @@ frappe.ui.form.on("Inquiry", {
 	show_assign_button: function (frm) {
 		// A dedicated one-click action for Commercial Manager instead of
 		// making them edit the commercial_officer field directly and then
-		// find a way to save -- this calls frappe.client.set_value directly
-		// (a plain API call, not dependent on the form's own toolbar/save
-		// button at all, which the Inquiry Workflow's own button-hiding
-		// logic can behave unpredictably around), which runs Inquiry's full
-		// save cycle server-side -- so commercial_status flips to
-		// "Assigned" automatically via sync_commercial_status(), no
-		// separate save step needed.
+		// find a way to save. Calls our own assign_commercial_officer
+		// method (explicit role check + ignore_permissions=True server-side)
+		// rather than frappe.client.set_value, which routes through
+		// Document.check_permission -> has_permission -> get_doc_permissions
+		// -> has_user_permission -- several layers of evaluation that proved
+		// too hard to reason about precisely from outside a live site, and
+		// kept rejecting a write that should have been allowed. This
+		// sidesteps that whole stack. commercial_status still flips to
+		// "Assigned" automatically via sync_commercial_status(), since the
+		// method runs Inquiry's full save cycle server-side.
 		if (frm.doc.docstatus === 1 && frappe.user_roles.includes("Commercial Manager")) {
 			const label = frm.doc.commercial_officer ? __("Reassign") : __("Assign");
 			frm.add_custom_button(label, function () {
@@ -79,12 +82,10 @@ frappe.ui.form.on("Inquiry", {
 					],
 					function (values) {
 						frappe.call({
-							method: "frappe.client.set_value",
+							method: "smart_app.smart_app.doctype.inquiry.inquiry.assign_commercial_officer",
 							args: {
-								doctype: frm.doctype,
-								name: frm.doc.name,
-								fieldname: "commercial_officer",
-								value: values.commercial_officer,
+								inquiry_name: frm.doc.name,
+								commercial_officer: values.commercial_officer,
 							},
 							freeze: true,
 							freeze_message: __("Assigning..."),

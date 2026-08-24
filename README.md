@@ -241,15 +241,22 @@ migrate cleans up any duplication a site already accumulated.
   actually set read-only for this role specifically, routing them to the
   button instead. It prompts for a Commercial Officer (same
   `get_commercial_officers` query as the field itself) and calls
-  `frappe.client.set_value` directly, a plain API call that isn't dependent
-  on the form's own toolbar/save button at all. That matters because the
-  Inquiry Workflow's own button-hiding logic (see "Submitting an Inquiry"
-  above) turned out to affect Save/Update too, not just Submit, in ways
-  that were hard to fully predict from outside Frappe's own workflow.js —
-  this sidesteps the question entirely rather than trying to out-guess it.
-  `commercial_status` still flips to "Assigned" automatically, since
-  `set_value` runs Inquiry's full save cycle server-side including
-  `sync_commercial_status()`.
+  `assign_commercial_officer` (`inquiry.py`) — a dedicated whitelisted
+  method with its own explicit role check
+  (Commercial Manager/System Manager only) plus a check that the target
+  user actually holds the Commercial Officer role, then
+  `doc.save(ignore_permissions=True)`. This deliberately bypasses Frappe's
+  generic permission stack (`Document.check_permission` ->
+  `has_permission` -> `get_doc_permissions` -> `has_user_permission` --
+  several layers of evaluation that proved too hard to reason about
+  precisely from outside a live site, and an earlier version routed through
+  `frappe.client.set_value` straight into that stack, which kept rejecting
+  a write that should have been allowed) in favour of the same
+  explicit-check-plus-`ignore_permissions` pattern already proven reliable
+  elsewhere in this app (`create_marketer`,
+  `create_customer_from_referred_party`). `commercial_status` still flips to
+  "Assigned" automatically, since the method runs Inquiry's full save cycle
+  server-side including `sync_commercial_status()`.
 - **Commercial Officer** — reads only the Inquiries assigned to *them*.
   Enforced the same way as Marketer's restriction, but simpler: since
   `commercial_officer` links directly to **User** (not via Employee), a

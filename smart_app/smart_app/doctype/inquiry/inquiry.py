@@ -262,6 +262,35 @@ def create_customer_from_referred_party(inquiry_name):
 
 
 @frappe.whitelist()
+def assign_commercial_officer(inquiry_name, commercial_officer=None):
+	"""Used by the Assign/Reassign button on the Inquiry form. Deliberately
+	bypasses the generic permission stack (Document.check_permission /
+	frappe.client.set_value both route through has_permission ->
+	get_doc_permissions -> has_user_permission -> several layers of
+	evaluation that proved hard to pin down precisely from outside a live
+	site) via an explicit role check plus ignore_permissions=True instead --
+	the same proven pattern already used by create_marketer and
+	create_customer_from_referred_party above, both of which work reliably
+	for exactly this reason."""
+	if not ({"Commercial Manager", "System Manager"} & set(frappe.get_roles(frappe.session.user))):
+		frappe.throw(
+			_("Only a Commercial Manager can assign a Commercial Officer."), frappe.PermissionError
+		)
+
+	if commercial_officer and "Commercial Officer" not in frappe.get_roles(commercial_officer):
+		frappe.throw(_("{0} does not have the Commercial Officer role.").format(commercial_officer))
+
+	doc = frappe.get_doc("Inquiry", inquiry_name)
+	if doc.docstatus != 1:
+		frappe.throw(_("Only a submitted Inquiry can be assigned to a Commercial Officer."))
+
+	doc.commercial_officer = commercial_officer
+	doc.save(ignore_permissions=True)
+
+	return doc.commercial_officer
+
+
+@frappe.whitelist()
 def make_quotation(source_name, target_doc=None):
 	"""Mirrors erpnext.crm.doctype.opportunity.opportunity.make_quotation --
 	called from the "Get Items From" > "Inquiry" button added to the core
