@@ -108,7 +108,24 @@ def has_permission(doc, ptype="read", user=None):
 	get_permission_query_conditions for direct single-document access
 	(opening by URL/name bypasses list-view filters). Returns None ("no
 	opinion, evaluate normally") except to explicitly deny a Commercial
-	Manager/Officer a non-submitted Inquiry."""
+	Manager/Officer *read* of a non-submitted Inquiry.
+
+	Deliberately scoped to ptype == "read" only, never write/submit/etc:
+	Frappe's own Document.check_permission() calls this same hook for every
+	permission type it evaluates, including internally as part of a save
+	(e.g. `frappe.client.set_value`, used by the Assign button) -- returning
+	False for a non-read ptype here caused a save that should have been
+	allowed (Commercial Manager writing to an already-submitted Inquiry) to
+	be rejected with a generic "does not have doctype access" error. The
+	actual goal -- Commercial Manager/Officer never see a draft at all --
+	is already fully achieved by gating just the read/list path; there's
+	nothing to additionally deny once someone has legitimately reached a
+	document via read access. get_permission_query_conditions above is
+	unaffected by this -- it only ever applies to list-style queries, never
+	to a direct save."""
+	if ptype != "read":
+		return None
+
 	user = user or frappe.session.user
 	roles = set(frappe.get_roles(user))
 
