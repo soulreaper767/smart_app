@@ -393,20 +393,34 @@ Request for Quotation they have write access to, no customisation needed).
 
 **It works the other way round too.** Request for Quotation gets its own
 `quotation` Custom Field (Link → Quotation, alongside the existing `inquiry`
-one) set directly by `create_request_for_quotation` — distinct fields for a
-reason: `quotation` traces this RFQ to the specific Quotation it came from,
-while `inquiry` traces the whole chain further back to the originating
-Inquiry, which isn't always the same thing (an RFQ started via the button
-below, from a Quotation that wasn't itself generated from an Inquiry, has
-`quotation` set but `inquiry` blank). `backfill_rfq_quotation_links` fills
-this in for RFQs that already existed before the field did, wherever exactly
-one Quotation matches the RFQ's `inquiry` unambiguously. The RFQ client
-script (same file, `RFQ_CLIENT_SCRIPT_JS`) adds the reverse entry point: a
-**"Get Items From → Quotation"** button on a *blank* Request for Quotation,
-prompting for a submitted Quotation and calling the exact same
-`create_request_for_quotation` method the Quotation-side button uses — so
-whichever doctype you start from, generating the other one works the same
-way.
+one) — distinct fields for a reason: `quotation` traces this RFQ to the
+specific Quotation it came from, while `inquiry` traces the whole chain
+further back to the originating Inquiry, which isn't always the same thing
+(an RFQ started via the button below, from a Quotation that wasn't itself
+generated from an Inquiry, has `quotation` set but `inquiry` blank).
+`backfill_rfq_quotation_links` fills this in for RFQs that already existed
+before the field did, wherever exactly one Quotation matches the RFQ's
+`inquiry` unambiguously.
+
+The RFQ client script (same file, `RFQ_CLIENT_SCRIPT_JS`) adds the reverse
+entry point: a **"Get Items From → Quotation"** button on a *blank* Request
+for Quotation. This deliberately uses `erpnext.utils.map_current_doc` —
+exactly the mechanism Quotation's own "Get Items From → Inquiry" button
+already uses — rather than a plain dialog-and-redirect: picking a Quotation
+fills in *the form already open in the browser*, in place — items,
+suppliers, and both the `quotation` and `inquiry` fields populate together
+in one action, instead of creating a separate document elsewhere and
+abandoning what was open. The server side is `make_request_for_quotation`
+(`inquiry.py`), a `get_mapped_doc`-based counterpart to
+`create_request_for_quotation` that shares its supplier-aggregation and
+email-template logic (`_populate_rfq_suppliers_and_template`) but returns a
+mapped document for the client to merge in, rather than inserting one
+itself — `create_request_for_quotation` stays exactly as it was for the
+other direction (the "Create → Request for Quotation" button on an
+already-open Quotation), where there's no blank RFQ open to fill in place,
+so creating a fresh document and navigating to it is the correct behaviour
+there. Whichever doctype you start from, generating the other one now works
+the same way, and always lands on one populated document, never two.
 
 **Sending the RFQ.** `setup_quotation_integration` adds one more Client
 Script, on Request for Quotation this time: a **"Submit & Send to

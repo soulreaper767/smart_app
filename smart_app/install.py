@@ -948,46 +948,27 @@ frappe.ui.form.on("Request for Quotation", {
 		// Quotation (see QUOTATION_CLIENT_SCRIPT_JS) -- that one goes
 		// Quotation -> new RFQ; this one lets someone start from a blank
 		// RFQ and pull items/suppliers from an existing Quotation instead,
-		// so the two doctypes are connected both ways. Reuses the exact
-		// same server-side method (create_request_for_quotation), which
-		// always inserts a fresh Request for Quotation of its own -- so
-		// this navigates away from the current blank draft to that new one
-		// rather than filling in the form in place.
-		if (frm.is_new() && frappe.model.can_create("Request for Quotation")) {
+		// so the two doctypes are connected both ways. Uses
+		// erpnext.utils.map_current_doc, exactly like Quotation's own
+		// "Get Items From > Inquiry" button -- so picking a Quotation here
+		// fills in THIS form in place (items, suppliers, the
+		// quotation/inquiry fields, all together) rather than creating a
+		// separate document elsewhere and navigating away from what's open.
+		if (frm.is_new() && frappe.model.can_read("Quotation")) {
 			frm.add_custom_button(
 				__("Quotation"),
 				function () {
-					frappe.prompt(
-						[
-							{
-								fieldname: "quotation",
-								label: __("Quotation"),
-								fieldtype: "Link",
-								options: "Quotation",
-								reqd: 1,
-								get_query: function () {
-									return { filters: { docstatus: 1 } };
-								},
-							},
-						],
-						function (values) {
-							frappe.call({
-								method: "smart_app.smart_app.doctype.inquiry.inquiry.create_request_for_quotation",
-								args: { quotation_name: values.quotation },
-								freeze: true,
-								freeze_message: __("Preparing Request for Quotation..."),
-								callback: function (r) {
-									if (r.message) {
-										frappe.set_route("Form", "Request for Quotation", r.message);
-									}
-								},
-							});
+					erpnext.utils.map_current_doc({
+						method: "smart_app.smart_app.doctype.inquiry.inquiry.make_request_for_quotation",
+						source_doctype: "Quotation",
+						target: frm,
+						get_query_filters: {
+							docstatus: 1,
 						},
-						__("Get Items From Quotation"),
-						__("Create")
-					);
+					});
 				},
-				__("Get Items From")
+				__("Get Items From"),
+				"btn-default"
 			);
 		}
 

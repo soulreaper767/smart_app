@@ -358,17 +358,69 @@ def make_quotation(source_name, target_doc=None):
 	return doclist
 
 
+def _populate_rfq_suppliers_and_template(rfq):
+	"""Shared by both directions of Quotation <-> Request for Quotation
+	generation (create_request_for_quotation and make_request_for_quotation
+	below): given an RFQ whose `items` table is already filled in,
+	aggregate every supplier of every one of those items
+	(Item.supplier_items — an item commonly has several, trader and
+	manufacturer alike, and all of them are pulled in so the RFQ can go out
+	to multiple suppliers at once) and wire in the corporate email
+	template. Throws if not one single item has a supplier on file at all —
+	an RFQ with nobody to send it to isn't useful, and this way the
+	deliberately-missing "who to send this to" problem surfaces up front
+	rather than as a silently supplier-less draft."""
+	suppliers_seen = {row.supplier for row in rfq.get("suppliers") or []}
+
+	for row in rfq.get("items") or []:
+		if not row.item_code:
+			continue
+		for supplier in frappe.get_all(
+			"Item Supplier", filters={"parent": row.item_code}, pluck="supplier"
+		):
+			if supplier in suppliers_seen:
+				continue
+			suppliers_seen.add(supplier)
+			contact_name = get_default_contact("Supplier", supplier)
+			email = frappe.db.get_value("Contact", contact_name, "email_id") if contact_name else None
+			rfq.append(
+				"suppliers",
+				{
+					"supplier": supplier,
+					"contact": contact_name,
+					"email_id": email,
+					"send_email": 1 if email else 0,
+				},
+			)
+
+	if not suppliers_seen:
+		frappe.throw(
+			_(
+				"None of the items in this Quotation have a linked Supplier yet. "
+				"Add suppliers under the Item's own \"Supplier Items\" table first."
+			)
+		)
+
+	from smart_app.install import RFQ_EMAIL_TEMPLATE_NAME
+
+	if frappe.db.exists("Email Template", RFQ_EMAIL_TEMPLATE_NAME):
+		rfq.email_template = RFQ_EMAIL_TEMPLATE_NAME
+		if hasattr(rfq, "set_data_for_supplier"):
+			rfq.set_data_for_supplier()
+
+
 @frappe.whitelist()
 def create_request_for_quotation(quotation_name):
-	"""Builds a draft Request for Quotation from a Quotation's items,
-	aggregating every supplier of every item (Item.supplier_items — an item
-	commonly has several, trader and manufacturer alike, and all of them are
-	pulled in so the RFQ can go out to multiple suppliers at once).
+	"""Builds a brand new, separate draft Request for Quotation from a
+	Quotation's items -- the "create a new document" direction, used by the
+	"Create > Request for Quotation" button on an already-open Quotation.
+	See make_request_for_quotation below for the reverse "Get Items From"
+	direction, used from a blank Request for Quotation instead.
 
 	Left as a draft for deliberate human review: this only prepares the RFQ
-	(items + supplier/contact/email rows) -- submitting it and clicking
-	"Send Supplier Emails" (both native Request for Quotation actions) is a
-	separate, explicit step for whoever is generating it.
+	(items + supplier/contact/email rows) -- submitting it (which also
+	sends it, see the "Submit & Send to Suppliers" button) is a separate,
+	explicit step for whoever is generating it.
 
 	Explicitly role-gated (not just relying on the button's client-side
 	`frappe.model.can_create` check) since the RFQ itself is inserted with
@@ -392,7 +444,6 @@ def create_request_for_quotation(quotation_name):
 	if frappe.get_meta("Request for Quotation").has_field("inquiry"):
 		rfq.inquiry = quotation.get("inquiry")
 
-	suppliers_seen = set()
 	for row in quotation.items:
 		if not row.item_code:
 			continue
@@ -410,38 +461,7 @@ def create_request_for_quotation(quotation_name):
 			},
 		)
 
-		for supplier in frappe.get_all(
-			"Item Supplier", filters={"parent": row.item_code}, pluck="supplier"
-		):
-			suppliers_seen.add(supplier)
-
-	if not suppliers_seen:
-		frappe.throw(
-			_(
-				"None of the items in this Quotation have a linked Supplier yet. "
-				"Add suppliers under the Item's own \"Supplier Items\" table first."
-			)
-		)
-
-	for supplier in suppliers_seen:
-		contact_name = get_default_contact("Supplier", supplier)
-		email = frappe.db.get_value("Contact", contact_name, "email_id") if contact_name else None
-		rfq.append(
-			"suppliers",
-			{
-				"supplier": supplier,
-				"contact": contact_name,
-				"email_id": email,
-				"send_email": 1 if email else 0,
-			},
-		)
-
-	from smart_app.install import RFQ_EMAIL_TEMPLATE_NAME
-
-	if frappe.db.exists("Email Template", RFQ_EMAIL_TEMPLATE_NAME):
-		rfq.email_template = RFQ_EMAIL_TEMPLATE_NAME
-		if hasattr(rfq, "set_data_for_supplier"):
-			rfq.set_data_for_supplier()
+	_populate_rfq_suppliers_and_template(rfq)
 
 	rfq.insert(ignore_permissions=True, ignore_mandatory=True)
 
@@ -449,3 +469,58 @@ def create_request_for_quotation(quotation_name):
 		frappe.db.set_value("Inquiry", quotation.inquiry, "commercial_status", "RFQ Created")
 
 	return rfq.name
+
+
+@frappe.whitelist()
+def make_request_for_quotation(source_name, target_doc=None):
+	"""get_mapped_doc counterpart to create_request_for_quotation above --
+	the reverse "Get Items From > Quotation" direction, used via
+	erpnext.utils.map_current_doc from a *blank* Request for Quotation (see
+	RFQ_CLIENT_SCRIPT_JS in install.py). Mirrors exactly how Quotation's own
+	"Get Items From > Inquiry" button works (map_current_doc + make_quotation
+	above): this fills in the form already open in the browser, in place --
+	items, suppliers, and the `quotation`/`inquiry` traceability fields all
+	populate together as soon as a Quotation is picked, rather than creating
+	a separate document elsewhere and navigating away from what you had
+	open. create_request_for_quotation stays a plain "create a new
+	document" RPC for the other direction, where there is no RFQ open yet
+	to fill in place."""
+
+	def update_item(source_row, target_row, source_parent):
+		target_row.schedule_date = frappe.utils.add_days(frappe.utils.today(), 7)
+		stock_uom = frappe.db.get_value("Item", source_row.item_code, "stock_uom")
+		target_row.uom = stock_uom
+		target_row.stock_uom = stock_uom
+		target_row.conversion_factor = 1
+
+	def set_missing_values(source, target):
+		rfq = frappe.get_doc(target)
+		rfq.transaction_date = rfq.transaction_date or frappe.utils.today()
+		_populate_rfq_suppliers_and_template(rfq)
+
+	field_map = {"company": "company", "name": "quotation"}
+	if frappe.get_meta("Quotation").has_field("inquiry") and frappe.get_meta(
+		"Request for Quotation"
+	).has_field("inquiry"):
+		field_map["inquiry"] = "inquiry"
+
+	doclist = get_mapped_doc(
+		"Quotation",
+		source_name,
+		{
+			"Quotation": {
+				"doctype": "Request for Quotation",
+				"field_map": field_map,
+			},
+			"Quotation Item": {
+				"doctype": "Request for Quotation Item",
+				"field_map": {"item_code": "item_code", "qty": "qty"},
+				"postprocess": update_item,
+				"add_if_empty": True,
+			},
+		},
+		target_doc,
+		set_missing_values,
+	)
+
+	return doclist
