@@ -234,6 +234,22 @@ migrate cleans up any duplication a site already accumulated.
   Inquiry-role set (Inquiry Manager/Officer/Marketer/Inquiry User) — they're
   a separate, downstream team, so the focused-sidebar Module Profile above
   never applies to them, and they keep normal access to Selling/Buying.
+
+  Assignment itself happens through a dedicated **Assign**/**Reassign**
+  button on the Inquiry form (`inquiry.js`, Commercial Manager only), not by
+  editing the `commercial_officer` field directly and saving — the field is
+  actually set read-only for this role specifically, routing them to the
+  button instead. It prompts for a Commercial Officer (same
+  `get_commercial_officers` query as the field itself) and calls
+  `frappe.client.set_value` directly, a plain API call that isn't dependent
+  on the form's own toolbar/save button at all. That matters because the
+  Inquiry Workflow's own button-hiding logic (see "Submitting an Inquiry"
+  above) turned out to affect Save/Update too, not just Submit, in ways
+  that were hard to fully predict from outside Frappe's own workflow.js —
+  this sidesteps the question entirely rather than trying to out-guess it.
+  `commercial_status` still flips to "Assigned" automatically, since
+  `set_value` runs Inquiry's full save cycle server-side including
+  `sync_commercial_status()`.
 - **Commercial Officer** — reads only the Inquiries assigned to *them*.
   Enforced the same way as Marketer's restriction, but simpler: since
   `commercial_officer` links directly to **User** (not via Employee), a
@@ -267,14 +283,16 @@ Commercial role.
 
 ### Test logins
 
-One test user per Commercial role, created by `setup_test_users` —
-**test credentials only**, meant for verifying each role's permissions
-end-to-end, not for production use:
+One test user per role, created by `setup_test_users` — **test credentials
+only**, meant for verifying each role's permissions end-to-end, not for
+production use:
 
 | Email | Password | Role |
 |---|---|---|
 | `commercialmanager@smartchem.com` | `Test@12345` | Commercial Manager |
 | `commercialofficer@smartchem.com` | `Test@12345` | Commercial Officer |
+| `inquiryofficer@smartchem.com` | `Test@12345` | Inquiry Officer |
+| `inquirymanager@smartchem.com` | `Test@12345` | Inquiry Manager |
 
 The password is only ever set on first creation — a later migrate never
 resets it, so changing it afterwards sticks. Disable or reset these before

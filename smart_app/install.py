@@ -209,7 +209,7 @@ def setup():
 	run_step(setup_module_profile, "restricted module profile")
 	run_step(setup_quotation_integration, "quotation get-items-from + create-rfq integration")
 	run_step(setup_item_master_columns, "item master columns (UOM/pharmacopeia/grade)")
-	run_step(setup_test_users, "commercial test users")
+	run_step(setup_test_users, "test users")
 	run_step(backfill_commercial_manager_inquiry_user_role, "backfill Inquiry User role for Commercial Manager")
 	run_step(setup_email_branding, "email footer branding")
 	run_step(setup_email_templates, "RFQ email template")
@@ -1487,11 +1487,11 @@ def setup_module_profile():
 
 
 # ---------------------------------------------------------------------------
-# Test users: one login per Commercial role, so permissions can be verified
-# end-to-end. TEST CREDENTIALS ONLY — the password is only ever set on
-# first creation (never reset on a later migrate, so changing it afterwards
-# sticks), and these should be disabled, removed, or given a real password
-# before any real deployment.
+# Test users: one login per role, so permissions can be verified end-to-end.
+# TEST CREDENTIALS ONLY — the password is only ever set on first creation
+# (never reset on a later migrate, so changing it afterwards sticks), and
+# these should be disabled, removed, or given a real password before any
+# real deployment.
 # ---------------------------------------------------------------------------
 
 TEST_USERS = [
@@ -1504,6 +1504,16 @@ TEST_USERS = [
 		"email": "commercialofficer@smartchem.com",
 		"full_name": "Commercial Officer (Test)",
 		"role": "Commercial Officer",
+	},
+	{
+		"email": "inquiryofficer@smartchem.com",
+		"full_name": "Inquiry Officer (Test)",
+		"role": "Inquiry Officer",
+	},
+	{
+		"email": "inquirymanager@smartchem.com",
+		"full_name": "Inquiry Manager (Test)",
+		"role": "Inquiry Manager",
 	},
 ]
 

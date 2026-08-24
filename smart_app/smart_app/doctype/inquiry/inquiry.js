@@ -9,6 +9,15 @@ frappe.ui.form.on("Inquiry", {
 		frm.set_query("commercial_officer", function () {
 			return { query: "smart_app.smart_app.doctype.inquiry.inquiry.get_commercial_officers" };
 		});
+
+		// Commercial Manager assigns via the dedicated "Assign"/"Reassign"
+		// button (see show_assign_button below), which is guaranteed to
+		// work regardless of the Inquiry Workflow's own toolbar behaviour --
+		// direct field edit + relying on a native Save button is what broke
+		// for this role in the first place, so route them away from that.
+		if (frappe.user_roles.includes("Commercial Manager") && !frappe.user_roles.includes("Inquiry Manager")) {
+			frm.set_df_property("commercial_officer", "read_only", 1);
+		}
 	},
 
 	onload: function (frm) {
@@ -34,8 +43,61 @@ frappe.ui.form.on("Inquiry", {
 	refresh: function (frm) {
 		frm.trigger("set_status_indicator");
 		frm.trigger("show_create_customer_button");
+		frm.trigger("show_assign_button");
 		frm.trigger("show_submit_button");
 		frm.trigger("show_create_quotation_button");
+	},
+
+	show_assign_button: function (frm) {
+		// A dedicated one-click action for Commercial Manager instead of
+		// making them edit the commercial_officer field directly and then
+		// find a way to save -- this calls frappe.client.set_value directly
+		// (a plain API call, not dependent on the form's own toolbar/save
+		// button at all, which the Inquiry Workflow's own button-hiding
+		// logic can behave unpredictably around), which runs Inquiry's full
+		// save cycle server-side -- so commercial_status flips to
+		// "Assigned" automatically via sync_commercial_status(), no
+		// separate save step needed.
+		if (frm.doc.docstatus === 1 && frappe.user_roles.includes("Commercial Manager")) {
+			const label = frm.doc.commercial_officer ? __("Reassign") : __("Assign");
+			frm.add_custom_button(label, function () {
+				frappe.prompt(
+					[
+						{
+							fieldname: "commercial_officer",
+							label: __("Commercial Officer"),
+							fieldtype: "Link",
+							options: "User",
+							reqd: 1,
+							default: frm.doc.commercial_officer,
+							get_query: function () {
+								return {
+									query: "smart_app.smart_app.doctype.inquiry.inquiry.get_commercial_officers",
+								};
+							},
+						},
+					],
+					function (values) {
+						frappe.call({
+							method: "frappe.client.set_value",
+							args: {
+								doctype: frm.doctype,
+								name: frm.doc.name,
+								fieldname: "commercial_officer",
+								value: values.commercial_officer,
+							},
+							freeze: true,
+							freeze_message: __("Assigning..."),
+							callback: function () {
+								frm.reload_doc();
+							},
+						});
+					},
+					__("Assign Commercial Officer"),
+					__("Assign")
+				);
+			}).addClass("btn-primary");
+		}
 	},
 
 	show_create_quotation_button: function (frm) {
