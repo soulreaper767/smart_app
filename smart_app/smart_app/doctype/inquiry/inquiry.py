@@ -387,6 +387,8 @@ def create_request_for_quotation(quotation_name):
 	rfq = frappe.new_doc("Request for Quotation")
 	rfq.company = quotation.company
 	rfq.transaction_date = frappe.utils.today()
+	if frappe.get_meta("Request for Quotation").has_field("quotation"):
+		rfq.quotation = quotation.name
 	if frappe.get_meta("Request for Quotation").has_field("inquiry"):
 		rfq.inquiry = quotation.get("inquiry")
 

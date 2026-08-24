@@ -391,6 +391,23 @@ a supplier — most usefully, delete any supplier row they don't actually want
 this RFQ to go to (plain grid-row delete, already available on any draft
 Request for Quotation they have write access to, no customisation needed).
 
+**It works the other way round too.** Request for Quotation gets its own
+`quotation` Custom Field (Link → Quotation, alongside the existing `inquiry`
+one) set directly by `create_request_for_quotation` — distinct fields for a
+reason: `quotation` traces this RFQ to the specific Quotation it came from,
+while `inquiry` traces the whole chain further back to the originating
+Inquiry, which isn't always the same thing (an RFQ started via the button
+below, from a Quotation that wasn't itself generated from an Inquiry, has
+`quotation` set but `inquiry` blank). `backfill_rfq_quotation_links` fills
+this in for RFQs that already existed before the field did, wherever exactly
+one Quotation matches the RFQ's `inquiry` unambiguously. The RFQ client
+script (same file, `RFQ_CLIENT_SCRIPT_JS`) adds the reverse entry point: a
+**"Get Items From → Quotation"** button on a *blank* Request for Quotation,
+prompting for a submitted Quotation and calling the exact same
+`create_request_for_quotation` method the Quotation-side button uses — so
+whichever doctype you start from, generating the other one works the same
+way.
+
 **Sending the RFQ.** `setup_quotation_integration` adds one more Client
 Script, on Request for Quotation this time: a **"Submit & Send to
 Suppliers"** button (visible on any draft that has at least one supplier

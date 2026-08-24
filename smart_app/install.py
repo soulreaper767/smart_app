@@ -214,6 +214,7 @@ def setup():
 	run_step(backfill_commercial_manager_inquiry_user_role, "backfill Inquiry User role for Commercial Manager")
 	run_step(backfill_commercial_status, "backfill blank/stuck commercial_status on existing Inquiries")
 	run_step(backfill_party_price_lists, "backfill default Price Lists for existing Customers/Suppliers")
+	run_step(backfill_rfq_quotation_links, "backfill quotation link on existing Requests for Quotation")
 	run_step(setup_email_branding, "email footer branding")
 	run_step(setup_email_templates, "RFQ email template")
 
@@ -943,6 +944,53 @@ frappe.ui.form.on("Quotation", {
 RFQ_CLIENT_SCRIPT_JS = """
 frappe.ui.form.on("Request for Quotation", {
 	refresh: function (frm) {
+		// The reverse direction of the "Request for Quotation" button on
+		// Quotation (see QUOTATION_CLIENT_SCRIPT_JS) -- that one goes
+		// Quotation -> new RFQ; this one lets someone start from a blank
+		// RFQ and pull items/suppliers from an existing Quotation instead,
+		// so the two doctypes are connected both ways. Reuses the exact
+		// same server-side method (create_request_for_quotation), which
+		// always inserts a fresh Request for Quotation of its own -- so
+		// this navigates away from the current blank draft to that new one
+		// rather than filling in the form in place.
+		if (frm.is_new() && frappe.model.can_create("Request for Quotation")) {
+			frm.add_custom_button(
+				__("Quotation"),
+				function () {
+					frappe.prompt(
+						[
+							{
+								fieldname: "quotation",
+								label: __("Quotation"),
+								fieldtype: "Link",
+								options: "Quotation",
+								reqd: 1,
+								get_query: function () {
+									return { filters: { docstatus: 1 } };
+								},
+							},
+						],
+						function (values) {
+							frappe.call({
+								method: "smart_app.smart_app.doctype.inquiry.inquiry.create_request_for_quotation",
+								args: { quotation_name: values.quotation },
+								freeze: true,
+								freeze_message: __("Preparing Request for Quotation..."),
+								callback: function (r) {
+									if (r.message) {
+										frappe.set_route("Form", "Request for Quotation", r.message);
+									}
+								},
+							});
+						},
+						__("Get Items From Quotation"),
+						__("Create")
+					);
+				},
+				__("Get Items From")
+			);
+		}
+
 		if (!frm.is_new() && frm.doc.docstatus === 0 && frm.doc.suppliers && frm.doc.suppliers.length) {
 			frm.add_custom_button(__("Submit & Send to Suppliers"), function () {
 				frappe.confirm(
@@ -968,6 +1016,15 @@ def setup_quotation_integration():
 	if frappe.db.exists("DocType", "Request for Quotation"):
 		_add_custom_field(
 			"Request for Quotation", "inquiry", "Inquiry", "Inquiry", insert_after="company"
+		)
+		# Traces this RFQ back to the specific Quotation it was generated
+		# from -- distinct from `inquiry` above, which traces the whole
+		# chain back further to the originating Inquiry (if any). An RFQ
+		# built from a Quotation that didn't itself come from an Inquiry
+		# (e.g. started directly via the reverse "Get Items From Quotation"
+		# button below) will have `quotation` set but `inquiry` blank.
+		_add_custom_field(
+			"Request for Quotation", "quotation", "Quotation", "Quotation", insert_after="inquiry"
 		)
 		_upsert_client_script(
 			"Inquiry - Commercial Pipeline (Request for Quotation)",
@@ -1749,6 +1806,31 @@ def backfill_party_price_lists():
 	for supplier in frappe.get_all("Supplier", fields=["name", "supplier_name", "default_price_list"]):
 		if not supplier.default_price_list:
 			ensure_default_price_list("Supplier", supplier.name, supplier.supplier_name or supplier.name)
+
+
+def backfill_rfq_quotation_links():
+	"""The `quotation` traceability field on Request for Quotation (see
+	setup_quotation_integration) is new -- any RFQ created before it existed
+	only ever got `inquiry` set. Where that Inquiry has exactly one
+	Quotation against it, that's unambiguously this RFQ's source -- fill it
+	in directly; left blank wherever it's ambiguous (more than one
+	Quotation against the same Inquiry) rather than guessing."""
+	if not frappe.db.exists("DocType", "Request for Quotation"):
+		return
+	if not frappe.get_meta("Request for Quotation").has_field("quotation"):
+		return
+
+	rfqs = frappe.get_all(
+		"Request for Quotation",
+		filters={"inquiry": ["is", "set"]},
+		fields=["name", "inquiry", "quotation"],
+	)
+	for rfq in rfqs:
+		if rfq.quotation:
+			continue
+		quotations = frappe.get_all("Quotation", filters={"inquiry": rfq.inquiry}, pluck="name")
+		if len(quotations) == 1:
+			frappe.db.set_value("Request for Quotation", rfq.name, "quotation", quotations[0])
 
 
 # ---------------------------------------------------------------------------
