@@ -472,55 +472,108 @@ def create_request_for_quotation(quotation_name):
 
 
 @frappe.whitelist()
-def make_request_for_quotation(source_name, target_doc=None):
-	"""get_mapped_doc counterpart to create_request_for_quotation above --
-	the reverse "Get Items From > Quotation" direction, used via
-	erpnext.utils.map_current_doc from a *blank* Request for Quotation (see
-	RFQ_CLIENT_SCRIPT_JS in install.py). Mirrors exactly how Quotation's own
-	"Get Items From > Inquiry" button works (map_current_doc + make_quotation
-	above): this fills in the form already open in the browser, in place --
-	items, suppliers, and the `quotation`/`inquiry` traceability fields all
-	populate together as soon as a Quotation is picked, rather than creating
-	a separate document elsewhere and navigating away from what you had
-	open. create_request_for_quotation stays a plain "create a new
-	document" RPC for the other direction, where there is no RFQ open yet
-	to fill in place."""
+def get_quotations_for_rfq(doctype, txt, searchfield, start, page_len, filters):
+	"""Link-field query for the "Get Items From > Quotation" button on a
+	blank Request for Quotation (RFQ_CLIENT_SCRIPT_JS). A Commercial
+	Officer should only ever be offered their OWN submitted Quotations to
+	build an RFQ from, never anyone else's -- Quotation has no
+	commercial_officer field of its own (only Inquiry does), so `owner` is
+	the accurate proxy: a Commercial Officer only ever creates a Quotation
+	for an Inquiry already scoped to themselves in the first place.
+	Commercial Manager/System Manager (oversight roles) see every
+	submitted Quotation."""
+	conditions = ["docstatus = 1", "(name like %(txt)s or party_name like %(txt)s)"]
+	values = {"txt": f"%{txt}%", "start": start, "page_len": page_len}
 
-	def update_item(source_row, target_row, source_parent):
-		target_row.schedule_date = frappe.utils.add_days(frappe.utils.today(), 7)
-		stock_uom = frappe.db.get_value("Item", source_row.item_code, "stock_uom")
-		target_row.uom = stock_uom
-		target_row.stock_uom = stock_uom
-		target_row.conversion_factor = 1
+	roles = frappe.get_roles(frappe.session.user)
+	if not ({"Commercial Manager", "System Manager"} & set(roles)):
+		conditions.append("owner = %(user)s")
+		values["user"] = frappe.session.user
 
-	def set_missing_values(source, target):
-		rfq = frappe.get_doc(target)
-		rfq.transaction_date = rfq.transaction_date or frappe.utils.today()
-		_populate_rfq_suppliers_and_template(rfq)
-
-	field_map = {"company": "company", "name": "quotation"}
-	if frappe.get_meta("Quotation").has_field("inquiry") and frappe.get_meta(
-		"Request for Quotation"
-	).has_field("inquiry"):
-		field_map["inquiry"] = "inquiry"
-
-	doclist = get_mapped_doc(
-		"Quotation",
-		source_name,
-		{
-			"Quotation": {
-				"doctype": "Request for Quotation",
-				"field_map": field_map,
-			},
-			"Quotation Item": {
-				"doctype": "Request for Quotation Item",
-				"field_map": {"item_code": "item_code", "qty": "qty"},
-				"postprocess": update_item,
-				"add_if_empty": True,
-			},
-		},
-		target_doc,
-		set_missing_values,
+	return frappe.db.sql(
+		f"""
+		select name, party_name
+		from `tabQuotation`
+		where {" and ".join(conditions)}
+		order by modified desc
+		limit %(page_len)s offset %(start)s
+		""",
+		values,
 	)
 
-	return doclist
+
+@frappe.whitelist()
+def get_request_for_quotation_data(quotation_name):
+	"""Used by the "Get Items From > Quotation" button on a blank Request
+	for Quotation (RFQ_CLIENT_SCRIPT_JS in install.py). Builds the exact
+	same items/suppliers/email_template as create_request_for_quotation,
+	but returns them as plain data for the client to merge into the form
+	that's already open (frm.set_value / clear_table / add_child), rather
+	than inserting a separate document -- erpnext.utils.map_current_doc's
+	generic MultiSelectDialog + frappe.model.mapper.map_docs pipeline
+	(the mechanism make_quotation's own Inquiry-mapping button uses) is
+	built around picking one-or-more *source rows*, not a single parent
+	document to clone data from, and didn't suit this direction well."""
+	quotation = frappe.get_doc("Quotation", quotation_name)
+	quotation.check_permission("read")
+
+	if not quotation.items:
+		frappe.throw(_("This Quotation has no items to request a quotation for."))
+
+	rfq = frappe.new_doc("Request for Quotation")
+	rfq.company = quotation.company
+	rfq.transaction_date = frappe.utils.today()
+	if frappe.get_meta("Request for Quotation").has_field("quotation"):
+		rfq.quotation = quotation.name
+	if frappe.get_meta("Request for Quotation").has_field("inquiry"):
+		rfq.inquiry = quotation.get("inquiry")
+
+	for row in quotation.items:
+		if not row.item_code:
+			continue
+		stock_uom = frappe.db.get_value("Item", row.item_code, "stock_uom")
+		rfq.append(
+			"items",
+			{
+				"item_code": row.item_code,
+				"qty": row.qty,
+				"schedule_date": frappe.utils.add_days(frappe.utils.today(), 7),
+				"uom": stock_uom,
+				"stock_uom": stock_uom,
+				"conversion_factor": 1,
+			},
+		)
+
+	_populate_rfq_suppliers_and_template(rfq)
+
+	return {
+		"company": rfq.company,
+		"transaction_date": rfq.transaction_date,
+		"quotation": rfq.get("quotation"),
+		"inquiry": rfq.get("inquiry"),
+		"email_template": rfq.get("email_template"),
+		"message_for_supplier": rfq.get("message_for_supplier"),
+		"mfs_html": rfq.get("mfs_html"),
+		"use_html": rfq.get("use_html"),
+		"subject": rfq.get("subject"),
+		"items": [
+			{
+				"item_code": d.item_code,
+				"qty": d.qty,
+				"schedule_date": d.schedule_date,
+				"uom": d.uom,
+				"stock_uom": d.stock_uom,
+				"conversion_factor": d.conversion_factor,
+			}
+			for d in rfq.items
+		],
+		"suppliers": [
+			{
+				"supplier": d.supplier,
+				"contact": d.contact,
+				"email_id": d.email_id,
+				"send_email": d.send_email,
+			}
+			for d in rfq.suppliers
+		],
+	}

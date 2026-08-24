@@ -404,23 +404,38 @@ before the field did, wherever exactly one Quotation matches the RFQ's
 
 The RFQ client script (same file, `RFQ_CLIENT_SCRIPT_JS`) adds the reverse
 entry point: a **"Get Items From → Quotation"** button on a *blank* Request
-for Quotation. This deliberately uses `erpnext.utils.map_current_doc` —
-exactly the mechanism Quotation's own "Get Items From → Inquiry" button
-already uses — rather than a plain dialog-and-redirect: picking a Quotation
-fills in *the form already open in the browser*, in place — items,
-suppliers, and both the `quotation` and `inquiry` fields populate together
-in one action, instead of creating a separate document elsewhere and
-abandoning what was open. The server side is `make_request_for_quotation`
-(`inquiry.py`), a `get_mapped_doc`-based counterpart to
-`create_request_for_quotation` that shares its supplier-aggregation and
-email-template logic (`_populate_rfq_suppliers_and_template`) but returns a
-mapped document for the client to merge in, rather than inserting one
-itself — `create_request_for_quotation` stays exactly as it was for the
-other direction (the "Create → Request for Quotation" button on an
-already-open Quotation), where there's no blank RFQ open to fill in place,
-so creating a fresh document and navigating to it is the correct behaviour
-there. Whichever doctype you start from, generating the other one now works
-the same way, and always lands on one populated document, never two.
+for Quotation, prompting for a Quotation (filtered server-side — see
+below) and filling in the form already open in the browser: items,
+suppliers, and the `quotation`/`inquiry` traceability fields all populate
+together in one action, via plain `frm.set_value` /
+`frm.clear_table("items")` + `frm.add_child(...)` calls in the callback —
+not `erpnext.utils.map_current_doc`. That was tried first (it's the
+mechanism Quotation's own "Get Items From → Inquiry" button uses), but its
+`MultiSelectDialog` + `frappe.model.mapper.map_docs` pipeline is built
+around picking one-or-more *rows* to pull into an existing table, not
+cloning one whole source document's data onto a blank one — it didn't work
+reliably for this direction, so this uses direct data-fetch instead. The
+server side is `get_request_for_quotation_data` (`inquiry.py`), which
+builds an in-memory (never inserted) RFQ using the exact same
+`_populate_rfq_suppliers_and_template` logic as `create_request_for_quotation`
+and returns it as plain data. `create_request_for_quotation` itself is
+unchanged for the other direction (the "Create → Request for Quotation"
+button on an already-open Quotation), where there's no blank RFQ open to
+fill in place, so creating a fresh document and navigating to it is the
+correct behaviour there.
+
+Both `quotation` and `inquiry` are locked to that button as their only
+entry point — `quotation` via a **Property Setter** (`read_only: 1`, so it's
+still visible as confirmation of what this RFQ was generated from, but
+never hand-editable), `inquiry` via a Property Setter (`hidden: 1`, since
+it's internal chain-tracing that isn't useful for a Commercial Officer
+looking at the form). The Quotation picker itself
+(`get_quotations_for_rfq` in `inquiry.py`) only ever offers a Commercial
+Officer their **own** Quotations (`owner = ` the current user — Quotation
+has no `commercial_officer` field of its own the way Inquiry does, but a
+Commercial Officer only ever creates one for an Inquiry already scoped to
+themselves, so `owner` is an accurate stand-in); Commercial Manager/System
+Manager see every submitted Quotation, for oversight.
 
 **Sending the RFQ.** `setup_quotation_integration` adds one more Client
 Script, on Request for Quotation this time: a **"Submit & Send to

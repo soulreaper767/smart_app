@@ -948,24 +948,72 @@ frappe.ui.form.on("Request for Quotation", {
 		// Quotation (see QUOTATION_CLIENT_SCRIPT_JS) -- that one goes
 		// Quotation -> new RFQ; this one lets someone start from a blank
 		// RFQ and pull items/suppliers from an existing Quotation instead,
-		// so the two doctypes are connected both ways. Uses
-		// erpnext.utils.map_current_doc, exactly like Quotation's own
-		// "Get Items From > Inquiry" button -- so picking a Quotation here
-		// fills in THIS form in place (items, suppliers, the
-		// quotation/inquiry fields, all together) rather than creating a
-		// separate document elsewhere and navigating away from what's open.
+		// so the two doctypes are connected both ways. Deliberately a plain
+		// Link prompt (filtered server-side to Quotations owned by the
+		// current user, unless they're a Commercial Manager/System
+		// Manager) + explicit frm.set_value/clear_table/add_child, not
+		// erpnext.utils.map_current_doc -- that mechanism's
+		// MultiSelectDialog + generic mapper pipeline is built around
+		// picking one-or-more *rows* to pull into an existing table, not
+		// cloning one whole source document's data onto a blank one, and
+		// didn't suit this direction well.
 		if (frm.is_new() && frappe.model.can_read("Quotation")) {
 			frm.add_custom_button(
 				__("Quotation"),
 				function () {
-					erpnext.utils.map_current_doc({
-						method: "smart_app.smart_app.doctype.inquiry.inquiry.make_request_for_quotation",
-						source_doctype: "Quotation",
-						target: frm,
-						get_query_filters: {
-							docstatus: 1,
+					frappe.prompt(
+						[
+							{
+								fieldname: "quotation",
+								label: __("Quotation"),
+								fieldtype: "Link",
+								options: "Quotation",
+								reqd: 1,
+								get_query: function () {
+									return {
+										query: "smart_app.smart_app.doctype.inquiry.inquiry.get_quotations_for_rfq",
+									};
+								},
+							},
+						],
+						function (values) {
+							frappe.call({
+								method: "smart_app.smart_app.doctype.inquiry.inquiry.get_request_for_quotation_data",
+								args: { quotation_name: values.quotation },
+								freeze: true,
+								freeze_message: __("Fetching items and suppliers..."),
+								callback: function (r) {
+									if (!r.message) return;
+									const data = r.message;
+
+									frm.set_value("company", data.company);
+									frm.set_value("transaction_date", data.transaction_date);
+									frm.set_value("quotation", data.quotation);
+									frm.set_value("inquiry", data.inquiry);
+									frm.set_value("email_template", data.email_template);
+									frm.set_value("message_for_supplier", data.message_for_supplier);
+									frm.set_value("mfs_html", data.mfs_html);
+									frm.set_value("use_html", data.use_html);
+									frm.set_value("subject", data.subject);
+
+									frm.clear_table("items");
+									(data.items || []).forEach(function (row) {
+										frm.add_child("items", row);
+									});
+
+									frm.clear_table("suppliers");
+									(data.suppliers || []).forEach(function (row) {
+										frm.add_child("suppliers", row);
+									});
+
+									frm.refresh_fields();
+									frm.dirty();
+								},
+							});
 						},
-					});
+						__("Get Items From Quotation"),
+						__("Fetch")
+					);
 				},
 				__("Get Items From"),
 				"btn-default"
@@ -1007,6 +1055,15 @@ def setup_quotation_integration():
 		_add_custom_field(
 			"Request for Quotation", "quotation", "Quotation", "Quotation", insert_after="inquiry"
 		)
+		# Neither field should be hand-edited directly -- the only supported
+		# way to set them is the "Get Items From > Quotation" button (see
+		# RFQ_CLIENT_SCRIPT_JS), which is also the only place `quotation`
+		# ever gets a value worth showing. `inquiry` stays fully hidden --
+		# it's internal chain-tracing (RFQ -> Quotation -> Inquiry), not
+		# something a Commercial Officer needs to see on this form; `quotation`
+		# stays visible but read-only, so it's there as confirmation once set.
+		_set_property_setter("Request for Quotation", "quotation", "read_only", "1", "Check")
+		_set_property_setter("Request for Quotation", "inquiry", "hidden", "1", "Check")
 		_upsert_client_script(
 			"Inquiry - Commercial Pipeline (Request for Quotation)",
 			"Request for Quotation",
