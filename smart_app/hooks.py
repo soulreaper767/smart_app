@@ -68,11 +68,21 @@ doc_events = {
 	},
 	"Quotation": {
 		"after_insert": "smart_app.smart_app.utils.update_inquiry_on_quotation_created",
+		"on_submit": "smart_app.smart_app.utils.sync_item_prices_from_quotation",
 	},
 	"Request for Quotation": {
 		"on_submit": "smart_app.smart_app.utils.update_inquiry_on_rfq_submit",
 	},
+	"Supplier Quotation": {
+		"on_submit": "smart_app.smart_app.utils.sync_item_prices_from_supplier_quotation",
+	},
 	"Item": {
 		"validate": "smart_app.smart_app.utils.enforce_single_preferred_supplier",
+	},
+	"Customer": {
+		"after_insert": "smart_app.smart_app.utils.create_default_price_list_for_customer",
+	},
+	"Supplier": {
+		"after_insert": "smart_app.smart_app.utils.create_default_price_list_for_supplier",
 	},
 }

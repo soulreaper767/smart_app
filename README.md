@@ -386,11 +386,38 @@ every one of those items (`Item.supplier_items` — deliberately *all* of
 them, since an item commonly has multiple suppliers, trader and
 manufacturer alike, and the RFQ should reach every one) added to the
 Suppliers table with their default Contact's email. It's left as a draft
-deliberately: submitting it and clicking "Send Supplier Emails" (both
-native Request for Quotation actions, which themselves require the site's
-Portal Settings to have Request for Quotation enabled) are explicit human
-steps, not automated — this reaches external suppliers, so a review
-checkpoint stays in the loop.
+deliberately, so a Commercial Officer can review it before anything reaches
+a supplier — most usefully, delete any supplier row they don't actually want
+this RFQ to go to (plain grid-row delete, already available on any draft
+Request for Quotation they have write access to, no customisation needed).
+
+**Sending the RFQ.** `setup_quotation_integration` adds one more Client
+Script, on Request for Quotation this time: a **"Submit & Send to
+Suppliers"** button (visible on any draft that has at least one supplier
+row), which — after a one-line confirm — calls `frm.savesubmit()`. That's
+deliberately the *entire* implementation: ERPNext's own `on_submit` for
+Request for Quotation already calls `send_to_supplier()` itself, so
+submitting **is** sending — a Commercial Officer doesn't need to separately
+find and click the native (and easy to miss) "Send Emails to Suppliers"
+button afterwards. It still is there natively for a later re-send, e.g. if a
+supplier's contact was fixed after the fact. Sending requires the site's
+Portal Settings to have Request for Quotation enabled (ERPNext's own
+`check_portal_enabled`) — since every supplier gets a link back to submit
+their reply on the buying portal, which is also the "corporate format" body:
+`RFQ_EMAIL_TEMPLATE_BODY` in `install.py` renders the actual item table
+(name/qty/UOM/required-by) plus that portal link and (for a first-time
+supplier contact) a set-password link, in one styled HTML block — using
+whatever's already on the RFQ (items, company, supplier) rather than asking
+anyone to type a new email each time. This replaced an earlier, broken
+version of the same template that referenced `{{ doc.company }}` /
+`{{ doc.name }}` against a flat template context (ERPNext's own
+`supplier_rfq_mail` renders it against `self.as_dict()` directly, not
+wrapped under a `doc` key, so those silently rendered blank) and never
+included the portal link at all — meaning a supplier receiving that email
+literally had no way to act on it. `setup_email_templates` self-heals this
+on migrate for any site that already had the old broken version, but leaves
+it alone if a Commercial Manager has since edited the wording by hand from
+Settings → Email → Email Template.
 
 **Managing multiple suppliers on an Item.** The native "Supplier Items"
 table on Item (Item Supplier child doctype) only ever carried `supplier` +
@@ -410,6 +437,49 @@ This doesn't change how RFQ generation itself works — `create_request_for_quot
 still blasts every supplier on every item regardless of type or preference,
 since "send RFQ to all of them" was the whole point; Preferred/Type are for
 a human scanning the Item form, not a filter on who gets contacted.
+
+## Multi-price management: a dedicated Price List per Customer/Supplier
+
+"Multiple sales and purchase prices for the same item" is entirely native
+ERPNext capability — a **Price List** groups Selling or Buying prices, and
+an **Item Price** row (item + price list + rate) is where an actual number
+lives — so this app doesn't reinvent it, it wires it up so nobody has to
+build it by hand or remember to maintain it:
+
+- **A dedicated Price List per party, automatically.** `ensure_default_price_list`
+  (`utils.py`) creates a Price List named `"<party name> - Selling"` /
+  `"- Buying"` for every Customer/Supplier, and sets it as their own
+  `default_price_list` (a stock field on both doctypes already — no Custom
+  Field needed). Hooked to `Customer.after_insert` /
+  `Supplier.after_insert`, so it happens the moment a party is created; a
+  name collision (two parties sharing a display name) falls back to
+  appending the party's own document name to stay unique.
+  `backfill_party_price_lists` in `install.py` runs the same thing for
+  every Customer/Supplier that already existed before this feature shipped,
+  so it isn't limited to records created from here on.
+- **Kept current automatically, from data already flowing through the
+  pipeline.** `sync_item_prices_from_quotation` (Quotation `on_submit`)
+  pushes each item's quoted rate into the Customer's own Price List;
+  `sync_item_prices_from_supplier_quotation` (Supplier Quotation
+  `on_submit`) does the same into the Supplier's own Price List once their
+  RFQ reply is submitted. Both upsert *in place* (`_upsert_item_price`
+  looks up the existing Item Price for that item + price list and updates
+  its rate) rather than inserting a new dated row every time — Item Price's
+  own duplicate check (same item/price list/UOM/valid-from/party) would
+  otherwise throw on a same-day repeat and interrupt whatever submit
+  triggered it.
+
+Net effect: every Item can carry as many concurrent prices as there are
+parties quoting on it — one Selling rate per Customer, one Buying rate per
+Supplier — all populated without a single manual Item Price entry, and all
+visible from the ordinary Price List / Item Price list views (Commercial
+Officer/Manager have select/read/write/create on both, granted in
+`grant_commercial_access`). This is a deliberate simplification, not full
+multi-currency support: a party's Price List is created once in the site's
+global default currency, and a Quotation/Supplier Quotation in a different
+currency will still write its rate there as a raw number — fine for a
+single-currency trading desk, but worth knowing if you deal in more than
+one currency per party.
 
 `commercial_status` advances automatically and only ever forward (never
 backward, e.g. a second Quotation created after an RFQ already went out

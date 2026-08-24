@@ -213,6 +213,7 @@ def setup():
 	run_step(setup_test_users, "test users")
 	run_step(backfill_commercial_manager_inquiry_user_role, "backfill Inquiry User role for Commercial Manager")
 	run_step(backfill_commercial_status, "backfill blank/stuck commercial_status on existing Inquiries")
+	run_step(backfill_party_price_lists, "backfill default Price Lists for existing Customers/Suppliers")
 	run_step(setup_email_branding, "email footer branding")
 	run_step(setup_email_templates, "RFQ email template")
 
@@ -350,6 +351,16 @@ def grant_commercial_access():
 			_grant_custom_docperm(doctype, role, select=1, read=1)
 
 		_grant_custom_docperm("Supplier", role, select=1, read=1)
+
+		# Multi-price management (see ensure_default_price_list /
+		# sync_item_prices_from_* in utils.py): the automatic sync itself
+		# runs with ignore_permissions=True, but the Commercial team still
+		# needs to browse/adjust the auto-maintained Price Lists and Item
+		# Prices directly from the desk.
+		for doctype in ("Price List", "Item Price"):
+			_grant_custom_docperm(
+				doctype, role, select=1, read=1, write=1, create=1, report=1, export=1,
+			)
 
 		# Commercial Officer generates these; Commercial Manager gets the
 		# same access for oversight (reassigning, reviewing, following up).
@@ -921,6 +932,31 @@ frappe.ui.form.on("Quotation", {
 });
 """.strip()
 
+# The draft RFQ that create_request_for_quotation (inquiry.py) builds already
+# carries every item and every supplier of every item, plus the corporate
+# email_template wired in via set_data_for_supplier -- all a Commercial
+# Officer needs to do is delete any supplier rows they don't want (plain
+# grid-row delete, already available on any draft with write access) and
+# send it. Submitting an RFQ already triggers ERPNext's own
+# send_to_supplier() from its on_submit -- so "Submit & Send to Suppliers"
+# is one action, not submit-then-hunt-for-the-separate-native-button.
+RFQ_CLIENT_SCRIPT_JS = """
+frappe.ui.form.on("Request for Quotation", {
+	refresh: function (frm) {
+		if (!frm.is_new() && frm.doc.docstatus === 0 && frm.doc.suppliers && frm.doc.suppliers.length) {
+			frm.add_custom_button(__("Submit & Send to Suppliers"), function () {
+				frappe.confirm(
+					__("This will submit the RFQ and email every supplier listed below. Continue?"),
+					function () {
+						frm.savesubmit();
+					}
+				);
+			}).addClass("btn-primary");
+		}
+	},
+});
+""".strip()
+
 
 def setup_quotation_integration():
 	if frappe.db.exists("DocType", "Quotation"):
@@ -932,6 +968,11 @@ def setup_quotation_integration():
 	if frappe.db.exists("DocType", "Request for Quotation"):
 		_add_custom_field(
 			"Request for Quotation", "inquiry", "Inquiry", "Inquiry", insert_after="company"
+		)
+		_upsert_client_script(
+			"Inquiry - Commercial Pipeline (Request for Quotation)",
+			"Request for Quotation",
+			RFQ_CLIENT_SCRIPT_JS,
 		)
 
 
@@ -1693,6 +1734,23 @@ def backfill_commercial_status():
 	)
 
 
+def backfill_party_price_lists():
+	"""ensure_default_price_list (utils.py) only runs automatically for a
+	*new* Customer/Supplier via their after_insert hook -- this applies the
+	same thing to every party that already existed before that feature was
+	added, so multi-price management isn't limited to records created from
+	here on."""
+	from smart_app.smart_app.utils import ensure_default_price_list
+
+	for customer in frappe.get_all("Customer", fields=["name", "customer_name", "default_price_list"]):
+		if not customer.default_price_list:
+			ensure_default_price_list("Customer", customer.name, customer.customer_name or customer.name)
+
+	for supplier in frappe.get_all("Supplier", fields=["name", "supplier_name", "default_price_list"]):
+		if not supplier.default_price_list:
+			ensure_default_price_list("Supplier", supplier.name, supplier.supplier_name or supplier.name)
+
+
 # ---------------------------------------------------------------------------
 # Email branding: replace Frappe/ERPNext's generic footer on outgoing
 # emails (used by RFQ supplier emails, among everything else) with a
@@ -1731,20 +1789,75 @@ def setup_email_branding():
 
 RFQ_EMAIL_TEMPLATE_NAME = "Request for Quotation - Supplier Message"
 
-RFQ_EMAIL_TEMPLATE_SUBJECT = "Request for Quotation - {{ doc.name }}"
+RFQ_EMAIL_TEMPLATE_SUBJECT = "Request for Quotation - {{ name }}"
 
+# Variables available here come from RequestforQuotation.supplier_rfq_mail in
+# ERPNext core (erpnext/buying/doctype/request_for_quotation/
+# request_for_quotation.py) -- it renders this against a FLAT dict
+# (self.as_dict(), i.e. every RFQ field directly: name, company, items, ...,
+# plus supplier/supplier_name/portal_link/update_password_link/user_fullname
+# merged in on top) -- there is no "doc" wrapper, so `{{ doc.name }}` would
+# silently render blank. portal_link is the supplier's actual way to respond
+# (a "Submit your Quotation" button to the RFQ portal) -- the original
+# version of this template omitted it entirely, so a supplier receiving that
+# email had no way to act on it at all.
 RFQ_EMAIL_TEMPLATE_BODY = """
-<p>Dear Sir/Madam,</p>
-<p>We would like to request your best quotation for the items listed below.
-Please share your price, lead time, and payment terms at your earliest
-convenience.</p>
-<p>Thank you,<br>{{ doc.company }}</p>
+<div style="font-family: Arial, Helvetica, sans-serif; color: #1f2937; max-width: 640px;">
+<p>Dear {{ supplier_name or supplier }},</p>
+<p>{{ company }} would like to request your best quotation for the item(s) listed below.
+Please share your price, lead time, and payment terms at your earliest convenience.</p>
+<table style="border-collapse: collapse; width: 100%; margin: 16px 0;">
+<thead>
+<tr style="background: #0f172a; color: #ffffff;">
+<th style="padding: 8px; text-align: left; border: 1px solid #0f172a;">Item</th>
+<th style="padding: 8px; text-align: left; border: 1px solid #0f172a;">Qty</th>
+<th style="padding: 8px; text-align: left; border: 1px solid #0f172a;">UOM</th>
+<th style="padding: 8px; text-align: left; border: 1px solid #0f172a;">Required By</th>
+</tr>
+</thead>
+<tbody>
+{% for item in items %}
+<tr>
+<td style="padding: 8px; border: 1px solid #cbd5e1;">{{ item.item_name or item.item_code }}</td>
+<td style="padding: 8px; border: 1px solid #cbd5e1;">{{ item.qty }}</td>
+<td style="padding: 8px; border: 1px solid #cbd5e1;">{{ item.uom }}</td>
+<td style="padding: 8px; border: 1px solid #cbd5e1;">{{ item.schedule_date }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+<p>{{ portal_link }}{% if update_password_link %} {{ update_password_link }}{% endif %}</p>
+<p>Thank you,<br>{{ user_fullname }}<br>{{ company }}</p>
+</div>
 """.strip()
 
 
 def setup_email_templates():
+	"""Self-healing, but only over content this installer generated itself --
+	if a Commercial Manager has since edited the wording from Settings >
+	Email > Email Template, that customisation is left alone rather than
+	silently overwritten on the next migrate."""
+	previously_generated_bodies = (
+		RFQ_EMAIL_TEMPLATE_BODY,
+		# the original template this replaced -- referenced `doc.company`
+		# against a flat context (silently rendered blank) and never
+		# included a portal_link, so a supplier had no way to actually
+		# respond to the RFQ.
+		"""<p>Dear Sir/Madam,</p>
+<p>We would like to request your best quotation for the items listed below.
+Please share your price, lead time, and payment terms at your earliest
+convenience.</p>
+<p>Thank you,<br>{{ doc.company }}</p>""",
+	)
+
 	if frappe.db.exists("Email Template", RFQ_EMAIL_TEMPLATE_NAME):
+		template = frappe.get_doc("Email Template", RFQ_EMAIL_TEMPLATE_NAME)
+		if template.response.strip() in previously_generated_bodies:
+			template.subject = RFQ_EMAIL_TEMPLATE_SUBJECT
+			template.response = RFQ_EMAIL_TEMPLATE_BODY
+			template.save(ignore_permissions=True)
 		return
+
 	frappe.get_doc(
 		{
 			"doctype": "Email Template",

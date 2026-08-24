@@ -187,6 +187,116 @@ def enforce_single_preferred_supplier(doc, method=None):
 				seen_preferred = True
 
 
+def ensure_default_price_list(party_doctype, party_name, display_name):
+	"""Give a Customer/Supplier its own dedicated Price List, so "multiple
+	sales and purchase prices for the same item" falls out naturally --
+	each party's own Price List holds its own rate for a given Item,
+	entirely via native Price List + Item Price (Customer/Supplier both
+	already have a `default_price_list` Link field in core ERPNext; nothing
+	custom needed there). Idempotent: a party that already has one (set
+	manually, or by an earlier run of this same function) is left alone.
+	Called both from the Customer/Supplier `after_insert` hooks below (so
+	every new party gets one automatically) and from
+	backfill_party_price_lists in install.py (so this also applies to every
+	party that already existed before this feature was added)."""
+	existing = frappe.db.get_value(party_doctype, party_name, "default_price_list")
+	if existing:
+		return existing
+
+	is_selling = party_doctype == "Customer"
+	suffix = "Selling" if is_selling else "Buying"
+	price_list_name = f"{display_name} - {suffix}"
+
+	if frappe.db.exists("Price List", price_list_name):
+		# Name collision with an unrelated Price List (e.g. two parties that
+		# happen to share a display name) -- fall back to a name that's
+		# guaranteed unique by including the party's own document name.
+		price_list_name = f"{display_name} - {suffix} ({party_name})"
+
+	if not frappe.db.exists("Price List", price_list_name):
+		currency = frappe.db.get_single_value("Global Defaults", "default_currency")
+		frappe.get_doc(
+			{
+				"doctype": "Price List",
+				"price_list_name": price_list_name,
+				"currency": currency,
+				"buying": 0 if is_selling else 1,
+				"selling": 1 if is_selling else 0,
+				"enabled": 1,
+			}
+		).insert(ignore_permissions=True)
+
+	frappe.db.set_value(party_doctype, party_name, "default_price_list", price_list_name)
+	return price_list_name
+
+
+def create_default_price_list_for_customer(doc, method=None):
+	"""Customer.after_insert."""
+	ensure_default_price_list("Customer", doc.name, doc.customer_name or doc.name)
+
+
+def create_default_price_list_for_supplier(doc, method=None):
+	"""Supplier.after_insert."""
+	ensure_default_price_list("Supplier", doc.name, doc.supplier_name or doc.name)
+
+
+def _upsert_item_price(item_code, price_list, rate):
+	"""Keep at most one current Item Price per (item, price_list) pair --
+	update its rate in place rather than inserting a new dated row every
+	time, since Item Price's own duplicate check (same item/price
+	list/UOM/valid-from/customer/supplier) would otherwise throw on a
+	same-day repeat and interrupt whatever submit triggered this."""
+	if not item_code or not price_list or rate in (None, 0):
+		return
+
+	name = frappe.db.get_value(
+		"Item Price", {"item_code": item_code, "price_list": price_list}, "name"
+	)
+	if name:
+		item_price = frappe.get_doc("Item Price", name)
+		if item_price.price_list_rate != rate:
+			item_price.price_list_rate = rate
+			item_price.save(ignore_permissions=True)
+	else:
+		frappe.get_doc(
+			{
+				"doctype": "Item Price",
+				"item_code": item_code,
+				"price_list": price_list,
+				"price_list_rate": rate,
+			}
+		).insert(ignore_permissions=True)
+
+
+def sync_item_prices_from_quotation(doc, method=None):
+	"""Quotation.on_submit: the selling side of automated multi-price
+	management -- once a Quotation to a Customer is submitted, push each
+	item's quoted rate into that Customer's own dedicated Price List (see
+	ensure_default_price_list), so their current selling price is always
+	up to date with no manual Item Price entry required."""
+	if doc.quotation_to != "Customer" or not doc.party_name:
+		return
+
+	customer_name = frappe.db.get_value("Customer", doc.party_name, "customer_name")
+	price_list = ensure_default_price_list("Customer", doc.party_name, customer_name or doc.party_name)
+	for row in doc.get("items") or []:
+		_upsert_item_price(row.item_code, price_list, row.rate)
+
+
+def sync_item_prices_from_supplier_quotation(doc, method=None):
+	"""Supplier Quotation.on_submit: the buying side -- once a supplier's
+	reply to an RFQ is submitted, push each item's quoted rate into that
+	Supplier's own dedicated Price List, so "last quoted buying price" is
+	always current without manual entry."""
+	if not doc.supplier:
+		return
+
+	supplier_name = frappe.db.get_value("Supplier", doc.supplier, "supplier_name")
+	price_list = ensure_default_price_list("Supplier", doc.supplier, supplier_name or doc.supplier)
+	for row in doc.get("items") or []:
+		_upsert_item_price(row.item_code, price_list, row.rate)
+
+
 def sync_marketer_permission_for_employee(employee_name):
 	"""Ensure a Marketer only ever sees/edits Inquiries where they are the
 	assigned Marketer. This is done with a standard Frappe User Permission,
