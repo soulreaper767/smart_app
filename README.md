@@ -267,7 +267,20 @@ enforced at the doctype level via `get_permission_query_conditions` and
 ToDo's owner-only restriction), so it applies uniformly to list views,
 reports, Kanban, global search, and opening one directly by URL. Inquiry
 Manager/System Manager are exempt even if they also happen to hold a
-Commercial role.
+Commercial role. `has_permission` is deliberately scoped to `ptype ==
+"read"` only — an earlier version denied every ptype, which meant it could
+also reject a legitimate *write* (Frappe's `Document.check_permission()`
+calls this same hook for every permission type it evaluates, including
+internally as part of a save) and broke the Assign button with a generic
+"does not have doctype access" error. The read-only scoping still fully
+achieves the goal, since there's nothing left to additionally restrict once
+someone has legitimately reached a document via read access.
+  *(Verified this doesn't extend to Marketer/Inquiry Officer's own
+  Permission-Level-1 restriction on the same contact-detail fields: Frappe's
+  native `reset_values_if_no_permlevel_access` silently reverts a
+  restricted field to its DB value on save rather than rejecting the whole
+  document — a fundamentally different, safer mechanism than the custom
+  hook that broke Commercial Manager.)*
 - Both roles are granted `select+read` on Item, Company, Currency, Customer,
   Contact, Address, UOM, Purchase Order, User (Commercial Manager needs this
   to search for a Commercial Officer to assign — the `commercial_officer`
