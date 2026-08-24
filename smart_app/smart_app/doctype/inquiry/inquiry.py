@@ -19,6 +19,22 @@ class Inquiry(Document):
 	def before_insert(self):
 		self.set_marketer_from_user()
 
+	def before_update_after_submit(self):
+		"""Frappe only runs the controller's validate() for a plain "save"
+		or "submit" action (see run_before_save_methods in frappe/model/
+		document.py) -- when a document is already submitted (docstatus=1)
+		and gets saved again with no docstatus change, that's a distinct
+		"update_after_submit" action, and the ONLY controller hook Frappe
+		calls for it is before_update_after_submit/on_update_after_submit.
+		validate() (and therefore sync_commercial_status()) never runs.
+
+		assign_commercial_officer() below always hits exactly this path --
+		it edits a field (commercial_officer) on an already-submitted Inquiry
+		and calls doc.save() -- so without this hook, commercial_status
+		silently never advanced to "Assigned" no matter how correct the
+		sync_commercial_status() logic itself was."""
+		self.sync_commercial_status()
+
 	def set_marketer_from_user(self):
 		"""Auto-select the Marketer field for users who hold the Marketer role."""
 		if self.marketer:

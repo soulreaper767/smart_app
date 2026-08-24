@@ -211,7 +211,7 @@ def setup():
 	run_step(setup_item_master_columns, "item master columns (UOM/pharmacopeia/grade)")
 	run_step(setup_test_users, "test users")
 	run_step(backfill_commercial_manager_inquiry_user_role, "backfill Inquiry User role for Commercial Manager")
-	run_step(backfill_commercial_status, "backfill blank commercial_status to Unassigned")
+	run_step(backfill_commercial_status, "backfill blank/stuck commercial_status on existing Inquiries")
 	run_step(setup_email_branding, "email footer branding")
 	run_step(setup_email_templates, "RFQ email template")
 
@@ -1572,6 +1572,26 @@ def backfill_commercial_status():
 		update `tabInquiry`
 		set commercial_status = 'Unassigned'
 		where commercial_status is null or commercial_status = ''
+		"""
+	)
+
+	# Separately, any Inquiry assigned via the Assign button before the
+	# before_update_after_submit fix (see inquiry.py) has a real
+	# commercial_officer on it but got stuck on commercial_status =
+	# "Unassigned", because validate()/sync_commercial_status() was never
+	# invoked for that save (Frappe only runs validate() for a "save" or
+	# "submit" action, not "update_after_submit" -- see the docstring on
+	# Inquiry.before_update_after_submit). This is real assignment data,
+	# not a display default, so it needs its own targeted correction --
+	# only rows genuinely stuck (officer set, status still Unassigned),
+	# never touching one already further along the pipeline.
+	frappe.db.sql(
+		"""
+		update `tabInquiry`
+		set commercial_status = 'Assigned'
+		where commercial_officer is not null
+			and commercial_officer != ''
+			and commercial_status = 'Unassigned'
 		"""
 	)
 

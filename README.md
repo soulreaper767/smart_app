@@ -254,15 +254,36 @@ migrate cleans up any duplication a site already accumulated.
   a write that should have been allowed) in favour of the same
   explicit-check-plus-`ignore_permissions` pattern already proven reliable
   elsewhere in this app (`create_marketer`,
-  `create_customer_from_referred_party`). `commercial_status` still flips to
-  "Assigned" automatically, since the method runs Inquiry's full save cycle
-  server-side including `sync_commercial_status()` — which treats a blank
-  `commercial_status` the same as `"Unassigned"`, since any Inquiry that
-  existed before that field was added to the doctype has it NULL in the
-  database, not the literal string (Frappe doesn't retroactively backfill a
-  new field's default onto existing rows). `backfill_commercial_status` in
-  `install.py` also normalises those directly on migrate, so the Commercial
-  Pipeline Kanban doesn't show a separate blank column for them.
+  `create_customer_from_referred_party`).
+
+  Getting `commercial_status` to actually flip to "Assigned" took two fixes,
+  not one — worth recording both since the first one looked right and
+  wasn't:
+  1. *(wrong fix, since corrected)* Originally assumed `sync_commercial_status()`
+     just wasn't matching a blank/NULL `commercial_status` against the exact
+     string `"Unassigned"` (true for any pre-existing Inquiry, since Frappe
+     never backfills a newly-added field's default onto old rows) — fixed
+     the string comparison, but the button still didn't work.
+  2. *(the actual root cause)* `assign_commercial_officer` edits a field and
+     calls `doc.save()` on an **already-submitted** Inquiry (`docstatus == 1`,
+     staying `1`). Frappe treats that as a distinct `"update_after_submit"`
+     action (see `check_docstatus_transition` in `frappe/model/document.py`),
+     and `run_before_save_methods` only invokes the controller's `validate()`
+     for a plain `"save"` or `"submit"` action — for `"update_after_submit"`
+     it calls `before_update_after_submit`/`on_update_after_submit` instead,
+     nothing else. So `Inquiry.validate()` — and therefore
+     `sync_commercial_status()` — was silently never running at all on the
+     Assign button's save, regardless of how correct its internal logic was.
+     Fixed by adding `Inquiry.before_update_after_submit()`, which also calls
+     `sync_commercial_status()`, so the sync now fires on this path too.
+
+  `backfill_commercial_status` in `install.py` handles the two resulting data
+  problems directly on migrate: (a) blank/NULL `commercial_status` on any
+  pre-existing Inquiry, normalised to `"Unassigned"`; and (b) any Inquiry
+  that was assigned via the button *before* fix #2 above and got stuck with
+  a real `commercial_officer` but `commercial_status` still `"Unassigned"` —
+  corrected straight to `"Assigned"` (only rows genuinely stuck in that
+  combination; never touches one already further along the pipeline).
 - **Commercial Officer** — reads only the Inquiries assigned to *them*.
   Enforced the same way as Marketer's restriction, but simpler: since
   `commercial_officer` links directly to **User** (not via Employee), a

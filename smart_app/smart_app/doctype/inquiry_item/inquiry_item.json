@@ -25,7 +25,7 @@
    "reqd": 1
   },
   {
-   "columns": 3,
+   "columns": 2,
    "fetch_from": "item.item_name",
    "fieldname": "item_name",
    "fieldtype": "Data",
@@ -44,7 +44,7 @@
    "read_only": 1
   },
   {
-   "columns": 2,
+   "columns": 1,
    "fetch_from": "item.custom_pharmacopeia",
    "fieldname": "custom_pharmacopeia",
    "fieldtype": "Data",
@@ -53,7 +53,7 @@
    "read_only": 1
   },
   {
-   "columns": 2,
+   "columns": 1,
    "fetch_from": "item.custom_item_grade",
    "fieldname": "custom_item_grade",
    "fieldtype": "Data",
