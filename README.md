@@ -222,12 +222,18 @@ migrate cleans up any duplication a site already accumulated.
 
 ## Commercial team roles & permissions
 
-- **Commercial Manager** — reads/writes every submitted Inquiry (not scoped
-  to any one officer), so they can see totals and assign
-  `commercial_officer`. Deliberately **not** part of the Inquiry-role set
-  (Inquiry Manager/Officer/Marketer/Inquiry User) — they're a separate,
-  downstream team, so the focused-sidebar Module Profile above never
-  applies to them, and they keep normal access to Selling/Buying.
+- **Commercial Manager** — reads/writes every **submitted** Inquiry (not
+  scoped to any one officer), so they can see totals and assign
+  `commercial_officer`; drafts are invisible to them entirely (see below).
+  Also holds Permission Level 1 read (but not write) on Inquiry — without
+  it, saving an Inquiry after setting `commercial_officer` would fail on
+  any Inquiry that already had contact details populated, since their
+  browser never received those Permission-Level-1 field values and would
+  round-trip them as blank, which Frappe treats as an attempted
+  unauthorised change and rejects. Deliberately **not** part of the
+  Inquiry-role set (Inquiry Manager/Officer/Marketer/Inquiry User) — they're
+  a separate, downstream team, so the focused-sidebar Module Profile above
+  never applies to them, and they keep normal access to Selling/Buying.
 - **Commercial Officer** — reads only the Inquiries assigned to *them*.
   Enforced the same way as Marketer's restriction, but simpler: since
   `commercial_officer` links directly to **User** (not via Employee), a
@@ -237,6 +243,15 @@ migrate cleans up any duplication a site already accumulated.
   when they hold the role, auto-removed when they don't. Inquiry's own
   `inquiry_officer` field has `ignore_user_permissions` set specifically so
   this restriction never also filters by *that* unrelated field.
+
+**Submitted-only visibility**: neither Commercial role can see a non-
+submitted Inquiry at all — not just via the Number Cards' own filters, but
+enforced at the doctype level via `get_permission_query_conditions` and
+`has_permission` in `inquiry.py` (the same pattern core Frappe uses for
+ToDo's owner-only restriction), so it applies uniformly to list views,
+reports, Kanban, global search, and opening one directly by URL. Inquiry
+Manager/System Manager are exempt even if they also happen to hold a
+Commercial role.
 - Both roles are granted `select+read` on Item, Company, Currency, Customer,
   Contact, Address, UOM, Purchase Order, User (Commercial Manager needs this
   to search for a Commercial Officer to assign — the `commercial_officer`
@@ -270,9 +285,17 @@ any real deployment.
 - **Number Cards**: Submitted Inquiries, Unassigned Inquiries, Assigned
   Inquiries (all `docstatus = 1`, the "unassigned" one filtered by
   `commercial_officer is not set`).
-- **Kanban Board** "Commercial Pipeline", grouped by `commercial_status`.
+- **Kanban Board** "Commercial Pipeline", grouped by `commercial_status`,
+  filtered to submitted Inquiries only.
 - **Query Report** "Commercial Assignment Overview" — every submitted
   Inquiry with its Commercial Officer and status.
+
+Clicking any of the three Number Cards (Frappe's standard behaviour, not
+custom code) navigates to the Inquiry list pre-filtered to that card's exact
+criteria — e.g. clicking **Assigned Inquiries** shows only those, and since
+`commercial_officer`/`commercial_status` are both list-view columns already,
+you see who each one is assigned to and its status right there without
+opening each record.
 
 All three (plus shortcuts to Quotation/RFQ/Supplier Quotation lists and the
 two core reports below) live under a **Commercial Team** section on the
@@ -280,12 +303,16 @@ Smart App workspace.
 
 ## Quotation → Request for Quotation pipeline
 
-Once an Inquiry is **submitted** and assigned, it becomes selectable from
-the core **Quotation** form's own "Get Items From" dropdown — click **Get
-Items From → Inquiry**, filtered to Inquiries assigned to the current
-Commercial Officer (`commercial_officer` = session user, `docstatus = 1`).
-This mirrors how ERPNext already does the same thing for Opportunity →
-Quotation.
+Once an Inquiry is **submitted** and assigned, a Commercial Officer can
+start the Quotation from *either* side, both ending up at the same
+`make_quotation` mapper:
+- From the **Inquiry** itself: **Create → Quotation** (mirrors ERPNext's own
+  Opportunity → "Create > Quotation" button exactly, same
+  `frappe.model.open_mapped_doc` call).
+- From a blank **Quotation**: **Get Items From → Inquiry**, filtered to
+  Inquiries assigned to the current Commercial Officer (`commercial_officer`
+  = session user, `docstatus = 1`) — mirroring how ERPNext does the same
+  thing for Opportunity → Quotation.
 
 From that Quotation, a second button — **Create → Request for Quotation**
 — builds a *draft* RFQ: every item carried over (Item, Qty, a 7-day
@@ -317,6 +344,26 @@ in `inquiry.py` — mirror
 `erpnext.crm.doctype.opportunity.opportunity.make_quotation` and the RFQ
 supplier/contact lookup pattern from ERPNext's own
 `request_for_quotation.py`, respectively.
+
+## Item master columns everywhere in the pipeline
+
+`setup_item_master_columns` surfaces three Item-master fields as visible
+grid columns on every item table across the whole flow — **Inquiry Item**,
+**Quotation Item**, **Request for Quotation Item**, and **Supplier
+Quotation Item**:
+
+- **UOM** — already exists on every one of these (core ERPNext field), just
+  not shown in the grid by default on some of them; a **Property Setter**
+  flips `in_list_view` on rather than touching ERPNext's own files.
+- **Pharmacopeia** / **Item Grade** — this site's own `custom_pharmacopeia`
+  / `custom_item_grade` fields on Item, which don't exist on any of these
+  child tables at all by default. Added as fetched, read-only **Custom
+  Fields** (`fetch_from: <item link fieldname>.custom_pharmacopeia`, etc.)
+  so they populate automatically and can't drift from the Item master.
+
+If your site doesn't actually have `custom_pharmacopeia`/`custom_item_grade`
+on Item, these columns will just stay blank rather than error — remove them
+via Customize Form if you don't want them.
 
 ## Email formats & footer branding
 

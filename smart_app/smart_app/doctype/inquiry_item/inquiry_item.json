@@ -7,13 +7,16 @@
  "field_order": [
   "item",
   "item_name",
+  "uom",
+  "custom_pharmacopeia",
+  "custom_item_grade",
   "qty",
   "item_group",
   "remarks"
  ],
  "fields": [
   {
-   "columns": 3,
+   "columns": 2,
    "fieldname": "item",
    "fieldtype": "Link",
    "in_list_view": 1,
@@ -28,6 +31,34 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Item Name",
+   "read_only": 1
+  },
+  {
+   "columns": 1,
+   "fetch_from": "item.stock_uom",
+   "fieldname": "uom",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "UOM",
+   "options": "UOM",
+   "read_only": 1
+  },
+  {
+   "columns": 2,
+   "fetch_from": "item.custom_pharmacopeia",
+   "fieldname": "custom_pharmacopeia",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Pharmacopeia",
+   "read_only": 1
+  },
+  {
+   "columns": 2,
+   "fetch_from": "item.custom_item_grade",
+   "fieldname": "custom_item_grade",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Item Grade",
    "read_only": 1
   },
   {

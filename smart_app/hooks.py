@@ -35,6 +35,18 @@ fixtures = [
 after_install = "smart_app.install.after_install"
 after_migrate = "smart_app.install.after_migrate"
 
+# Permissions
+# ------------------
+# Commercial Manager/Officer only ever have a reason to see a *submitted*
+# Inquiry -- restricted at the doctype level (list view, reports, kanban,
+# search, direct URL access), not just via the Number Card filters.
+permission_query_conditions = {
+	"Inquiry": "smart_app.smart_app.doctype.inquiry.inquiry.get_permission_query_conditions",
+}
+has_permission = {
+	"Inquiry": "smart_app.smart_app.doctype.inquiry.inquiry.has_permission",
+}
+
 # Document Events
 # ------------------
 doc_events = {

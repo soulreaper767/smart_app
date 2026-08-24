@@ -80,6 +80,45 @@ class Inquiry(Document):
 			self.commercial_status = "Unassigned"
 
 
+COMMERCIAL_VIEW_ROLES = {"Commercial Manager", "Commercial Officer"}
+COMMERCIAL_VIEW_EXEMPT_ROLES = {"Inquiry Manager", "System Manager"}
+
+
+def get_permission_query_conditions(user):
+	"""Registered via hooks.py `permission_query_conditions`. The Commercial
+	team only ever has a reason to look at a *submitted* Inquiry (that's the
+	whole trigger for the pipeline) -- restrict Commercial Manager/Officer
+	from seeing drafts at all: list view, reports, kanban, search, Number
+	Card counts. Mirrors ToDo's own get_permission_query_conditions pattern
+	in core Frappe. Anyone who's also Inquiry Manager/System Manager is
+	exempt, same as has_permission below."""
+	if not user:
+		user = frappe.session.user
+
+	roles = set(frappe.get_roles(user))
+	if roles & COMMERCIAL_VIEW_EXEMPT_ROLES:
+		return None
+	if roles & COMMERCIAL_VIEW_ROLES:
+		return "`tabInquiry`.docstatus = 1"
+	return None
+
+
+def has_permission(doc, ptype="read", user=None):
+	"""Registered via hooks.py `has_permission`. Mirrors
+	get_permission_query_conditions for direct single-document access
+	(opening by URL/name bypasses list-view filters). Returns None ("no
+	opinion, evaluate normally") except to explicitly deny a Commercial
+	Manager/Officer a non-submitted Inquiry."""
+	user = user or frappe.session.user
+	roles = set(frappe.get_roles(user))
+
+	if roles & COMMERCIAL_VIEW_EXEMPT_ROLES:
+		return None
+	if roles & COMMERCIAL_VIEW_ROLES and doc.docstatus != 1:
+		return False
+	return None
+
+
 def get_employee_for_user(user):
 	return frappe.db.get_value("Employee", {"user_id": user, "status": "Active"}, "name")
 

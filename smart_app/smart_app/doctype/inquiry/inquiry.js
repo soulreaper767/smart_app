@@ -35,6 +35,26 @@ frappe.ui.form.on("Inquiry", {
 		frm.trigger("set_status_indicator");
 		frm.trigger("show_create_customer_button");
 		frm.trigger("show_submit_button");
+		frm.trigger("show_create_quotation_button");
+	},
+
+	show_create_quotation_button: function (frm) {
+		// Mirrors ERPNext's own Opportunity -> "Create > Quotation" button
+		// exactly (same frappe.model.open_mapped_doc call), so a Commercial
+		// Officer/Manager doesn't have to go the other way round (open a
+		// blank Quotation and use "Get Items From") just to start one.
+		if (frm.doc.docstatus === 1 && frappe.model.can_create("Quotation")) {
+			frm.add_custom_button(
+				__("Quotation"),
+				function () {
+					frappe.model.open_mapped_doc({
+						method: "smart_app.smart_app.doctype.inquiry.inquiry.make_quotation",
+						frm: frm,
+					});
+				},
+				__("Create")
+			);
+		}
 	},
 
 	show_submit_button: function (frm) {

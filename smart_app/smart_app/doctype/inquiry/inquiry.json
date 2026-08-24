@@ -436,6 +436,11 @@
    "write": 1
   },
   {
+   "permlevel": 1,
+   "read": 1,
+   "role": "Commercial Manager"
+  },
+  {
    "email": 1,
    "print": 1,
    "read": 1,

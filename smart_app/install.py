@@ -208,6 +208,7 @@ def setup():
 	run_step(grant_inquiry_manager_workflow_access, "inquiry manager workflow access")
 	run_step(setup_module_profile, "restricted module profile")
 	run_step(setup_quotation_integration, "quotation get-items-from + create-rfq integration")
+	run_step(setup_item_master_columns, "item master columns (UOM/pharmacopeia/grade)")
 	run_step(setup_test_users, "commercial test users")
 	run_step(backfill_commercial_manager_inquiry_user_role, "backfill Inquiry User role for Commercial Manager")
 	run_step(setup_email_branding, "email footer branding")
@@ -967,6 +968,73 @@ def _upsert_client_script(name, dt, script_body, view="Form"):
 		script.insert(ignore_permissions=True)
 	elif changed:
 		script.save(ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
+# Item master columns on every item table in the trading pipeline: UOM
+# (exists everywhere already, just hidden from the grid by default) and
+# this site's own custom_pharmacopeia / custom_item_grade fields on Item
+# (which don't exist on any of these core child tables at all).
+# ---------------------------------------------------------------------------
+
+# child doctype -> its own Link-to-Item fieldname (Inquiry Item uses "item";
+# every core ERPNext item table uses "item_code")
+ITEM_MASTER_COLUMN_DOCTYPES = {
+	"Quotation Item": "item_code",
+	"Request for Quotation Item": "item_code",
+	"Supplier Quotation Item": "item_code",
+}
+
+
+def setup_item_master_columns():
+	for dt, item_fieldname in ITEM_MASTER_COLUMN_DOCTYPES.items():
+		if not frappe.db.exists("DocType", dt):
+			continue
+
+		_set_property_setter(dt, "uom", "in_list_view", "1", "Check")
+
+		for fieldname, label, insert_after in (
+			("custom_pharmacopeia", "Pharmacopeia", item_fieldname),
+			("custom_item_grade", "Item Grade", "custom_pharmacopeia"),
+		):
+			name = f"{dt}-{fieldname}"
+			if frappe.db.exists("Custom Field", name):
+				continue
+			frappe.get_doc(
+				{
+					"doctype": "Custom Field",
+					"dt": dt,
+					"fieldname": fieldname,
+					"label": label,
+					"fieldtype": "Data",
+					"fetch_from": f"{item_fieldname}.{fieldname}",
+					"insert_after": insert_after,
+					"in_list_view": 1,
+					"read_only": 1,
+					"allow_on_submit": 1,
+				}
+			).insert(ignore_permissions=True)
+
+
+def _set_property_setter(doctype, fieldname, property_name, value, property_type):
+	"""Property Setter's own autoname is "{doc_type}-{field_name}-{property}"
+	(confirmed against its controller), and its own validate() deletes any
+	pre-existing conflicting one before inserting -- so this just needs a
+	cheap guard against re-writing an already-correct value on every run."""
+	name = f"{doctype}-{fieldname}-{property_name}"
+	if frappe.db.get_value("Property Setter", name, "value") == value:
+		return
+	frappe.get_doc(
+		{
+			"doctype": "Property Setter",
+			"doctype_or_field": "DocField",
+			"doc_type": doctype,
+			"field_name": fieldname,
+			"property": property_name,
+			"value": value,
+			"property_type": property_type,
+		}
+	).insert(ignore_permissions=True)
 
 
 # ---------------------------------------------------------------------------
