@@ -430,6 +430,25 @@ If your site doesn't actually have `custom_pharmacopeia`/`custom_item_grade`
 on Item, these columns will just stay blank rather than error — remove them
 via Customize Form if you don't want them.
 
+**Grid width budget.** A compact grid row only has room for so many columns
+before later ones get pushed off-screen — Frappe doesn't wrap or shrink
+automatically, it just stops rendering whatever doesn't fit. Quotation
+Item's and Supplier Quotation Item's native in_list_view fields (`item_code`,
+`qty`, and their `rate`/`amount`) already summed close to a full row on their
+own; adding `uom`/`custom_pharmacopeia`/`custom_item_grade` as more
+in_list_view columns without shrinking anything pushed `rate`/`amount` — both
+later in `field_order` — out of the visible grid entirely, even though both
+were already `in_list_view: 1` natively. That's what "rate and value aren't
+shown" actually was. Fixed by tightening `item_code`/`qty`/`uom` and the two
+custom fields to single-width columns via Property Setter (`rate`/`amount`
+kept their native width of 2), freeing enough room for all of them to stay
+on-screen together. **Inquiry Item** (this app's own doctype, not core
+ERPNext, so no Property Setter needed) got the same column-width rebalance
+directly in its JSON, for the same reason — its own `qty` was being pushed
+out by the same crowding. **Request for Quotation Item** has neither `rate`
+nor `amount` at all — an RFQ is the request sent out *before* any supplier
+has quoted a price, so there's nothing to show there.
+
 ## Email formats & footer branding
 
 `setup_email_branding` disables Frappe/ERPNext's generic "Sent via ERPNext"

@@ -986,6 +986,11 @@ ITEM_MASTER_COLUMN_DOCTYPES = {
 	"Supplier Quotation Item": "item_code",
 }
 
+# Only these two actually carry a rate/amount at all -- Request for Quotation
+# Item has neither field: an RFQ is the request sent out *before* any
+# supplier has quoted a price, so there's nothing to show yet.
+RATE_VALUE_COLUMN_DOCTYPES = ("Quotation Item", "Supplier Quotation Item")
+
 
 def setup_item_master_columns():
 	for dt, item_fieldname in ITEM_MASTER_COLUMN_DOCTYPES.items():
@@ -994,12 +999,29 @@ def setup_item_master_columns():
 
 		_set_property_setter(dt, "uom", "in_list_view", "1", "Check")
 
+		# Every one of these doctypes' native in_list_view fields (item_code,
+		# qty, and -- for the two below -- rate/amount) already summed close
+		# to a full-width grid row on their own; inserting uom/pharmacopeia/
+		# grade as additional in_list_view columns without shrinking anything
+		# pushed rate/amount (later in field_order) out of the visible grid
+		# entirely, which is exactly what looked like "rate and value aren't
+		# shown". Tightening these three to single-width columns is what
+		# frees enough room for rate/amount to stay on-screen.
+		_set_property_setter(dt, "item_code", "columns", "2", "Int")
+		_set_property_setter(dt, "qty", "columns", "1", "Int")
+		_set_property_setter(dt, "uom", "columns", "1", "Int")
+
 		for fieldname, label, insert_after in (
 			("custom_pharmacopeia", "Pharmacopeia", item_fieldname),
 			("custom_item_grade", "Item Grade", "custom_pharmacopeia"),
 		):
 			name = f"{dt}-{fieldname}"
 			if frappe.db.exists("Custom Field", name):
+				cf = frappe.get_doc("Custom Field", name)
+				if not cf.in_list_view or cf.columns != 1:
+					cf.in_list_view = 1
+					cf.columns = 1
+					cf.save(ignore_permissions=True)
 				continue
 			frappe.get_doc(
 				{
@@ -1011,10 +1033,19 @@ def setup_item_master_columns():
 					"fetch_from": f"{item_fieldname}.{fieldname}",
 					"insert_after": insert_after,
 					"in_list_view": 1,
+					"columns": 1,
 					"read_only": 1,
 					"allow_on_submit": 1,
 				}
 			).insert(ignore_permissions=True)
+
+	for dt in RATE_VALUE_COLUMN_DOCTYPES:
+		if not frappe.db.exists("DocType", dt):
+			continue
+		_set_property_setter(dt, "rate", "in_list_view", "1", "Check")
+		_set_property_setter(dt, "rate", "columns", "2", "Int")
+		_set_property_setter(dt, "amount", "in_list_view", "1", "Check")
+		_set_property_setter(dt, "amount", "columns", "2", "Int")
 
 
 def _set_property_setter(doctype, fieldname, property_name, value, property_type):
