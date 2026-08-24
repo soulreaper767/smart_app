@@ -74,7 +74,7 @@ branding. All covered in detail further down.
 | `shipment_mode` / `payment_mode` / `incoterm` | Links to the three manager-editable master lists |
 | `amended_from` | standard field for a submittable doctype |
 | `commercial_officer` | Link → User, `allow_on_submit` — set by Commercial Manager once submitted; restricted by query to Commercial Officer role holders |
-| `commercial_status` | Unassigned / Assigned / Quotation Created / RFQ Created / RFQ Sent — read-only, advanced automatically as the Commercial pipeline progresses, never manually edited |
+| `commercial_status` | Unassigned / Assigned / Quotation Created / RFQ Created / RFQ Sent — read-only, advanced automatically as the Commercial pipeline progresses, never manually edited. Independent of `inquiry_status` (Open/Quotation/Replied/...) by design: `inquiry_status` tracks the customer-facing conversation (owned by Marketer/Inquiry Officer's Workflow), `commercial_status` tracks the internal Commercial-team pipeline once submitted — they're two separate dimensions, not different labels for the same thing, so `inquiry_status` intentionally never shows "Assigned" |
 | `notes` | free text |
 
 ## Roles & permissions
@@ -256,7 +256,13 @@ migrate cleans up any duplication a site already accumulated.
   elsewhere in this app (`create_marketer`,
   `create_customer_from_referred_party`). `commercial_status` still flips to
   "Assigned" automatically, since the method runs Inquiry's full save cycle
-  server-side including `sync_commercial_status()`.
+  server-side including `sync_commercial_status()` — which treats a blank
+  `commercial_status` the same as `"Unassigned"`, since any Inquiry that
+  existed before that field was added to the doctype has it NULL in the
+  database, not the literal string (Frappe doesn't retroactively backfill a
+  new field's default onto existing rows). `backfill_commercial_status` in
+  `install.py` also normalises those directly on migrate, so the Commercial
+  Pipeline Kanban doesn't show a separate blank column for them.
 - **Commercial Officer** — reads only the Inquiries assigned to *them*.
   Enforced the same way as Marketer's restriction, but simpler: since
   `commercial_officer` links directly to **User** (not via Employee), a

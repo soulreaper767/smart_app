@@ -73,8 +73,15 @@ class Inquiry(Document):
 		Inquiry, flip commercial_status from Unassigned to Assigned. Later
 		stages (Quotation Created / RFQ Created / RFQ Sent) are advanced
 		elsewhere, from Quotation/Request for Quotation doc events (see
-		smart_app.smart_app.utils), never walked backwards here."""
-		if self.commercial_officer and self.commercial_status == "Unassigned":
+		smart_app.smart_app.utils), never walked backwards here.
+
+		Treats a blank/null commercial_status the same as "Unassigned" --
+		any Inquiry that existed before this field was added to the doctype
+		has NULL here, not the literal string "Unassigned" (Frappe doesn't
+		retroactively backfill a new field's default onto existing rows),
+		so an exact-string check alone silently never fires for those."""
+		is_unassigned = self.commercial_status in (None, "", "Unassigned")
+		if self.commercial_officer and is_unassigned:
 			self.commercial_status = "Assigned"
 		elif not self.commercial_officer and self.commercial_status == "Assigned":
 			self.commercial_status = "Unassigned"

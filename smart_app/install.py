@@ -211,6 +211,7 @@ def setup():
 	run_step(setup_item_master_columns, "item master columns (UOM/pharmacopeia/grade)")
 	run_step(setup_test_users, "test users")
 	run_step(backfill_commercial_manager_inquiry_user_role, "backfill Inquiry User role for Commercial Manager")
+	run_step(backfill_commercial_status, "backfill blank commercial_status to Unassigned")
 	run_step(setup_email_branding, "email footer branding")
 	run_step(setup_email_templates, "RFQ email template")
 
@@ -1556,6 +1557,23 @@ def backfill_commercial_manager_inquiry_user_role():
 		user = frappe.get_doc("User", user_name)
 		if "Inquiry User" not in [r.role for r in user.roles]:
 			user.save(ignore_permissions=True)
+
+
+def backfill_commercial_status():
+	"""Any Inquiry that existed before commercial_status was added to the
+	doctype has NULL there, not the literal string "Unassigned" (Frappe
+	doesn't retroactively backfill a new field's default onto existing
+	rows) -- normalise those directly so the Commercial Pipeline Kanban
+	doesn't show a separate blank column, and so Inquiry.sync_commercial_
+	status's own defensive handling of this (see inquiry.py) always has a
+	clean starting point going forward."""
+	frappe.db.sql(
+		"""
+		update `tabInquiry`
+		set commercial_status = 'Unassigned'
+		where commercial_status is null or commercial_status = ''
+		"""
+	)
 
 
 # ---------------------------------------------------------------------------
