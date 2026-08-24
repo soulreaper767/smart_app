@@ -170,6 +170,23 @@ def update_inquiry_on_rfq_submit(doc, method=None):
 		advance_inquiry_commercial_status(doc.inquiry, "RFQ Sent")
 
 
+def enforce_single_preferred_supplier(doc, method=None):
+	"""Item.validate: an Item can carry several Suppliers on file (see
+	setup_item_supplier_customization in install.py, which adds
+	`supplier_type` and `is_preferred_supplier` to the native "Supplier
+	Items" table) -- only one of them should ever be flagged preferred at a
+	time, so there's one unambiguous default to point to. If a user checks
+	a second row, silently uncheck the earlier one(s) rather than blocking
+	the save with a validation error."""
+	seen_preferred = False
+	for row in doc.get("supplier_items") or []:
+		if row.get("is_preferred_supplier"):
+			if seen_preferred:
+				row.is_preferred_supplier = 0
+			else:
+				seen_preferred = True
+
+
 def sync_marketer_permission_for_employee(employee_name):
 	"""Ensure a Marketer only ever sees/edits Inquiries where they are the
 	assigned Marketer. This is done with a standard Frappe User Permission,

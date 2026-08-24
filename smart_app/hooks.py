@@ -72,4 +72,7 @@ doc_events = {
 	"Request for Quotation": {
 		"on_submit": "smart_app.smart_app.utils.update_inquiry_on_rfq_submit",
 	},
+	"Item": {
+		"validate": "smart_app.smart_app.utils.enforce_single_preferred_supplier",
+	},
 }

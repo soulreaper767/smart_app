@@ -209,6 +209,7 @@ def setup():
 	run_step(setup_module_profile, "restricted module profile")
 	run_step(setup_quotation_integration, "quotation get-items-from + create-rfq integration")
 	run_step(setup_item_master_columns, "item master columns (UOM/pharmacopeia/grade)")
+	run_step(setup_item_supplier_customization, "multi-supplier management on Item (type/preferred)")
 	run_step(setup_test_users, "test users")
 	run_step(backfill_commercial_manager_inquiry_user_role, "backfill Inquiry User role for Commercial Manager")
 	run_step(backfill_commercial_status, "backfill blank/stuck commercial_status on existing Inquiries")
@@ -1067,6 +1068,71 @@ def _set_property_setter(doctype, fieldname, property_name, value, property_type
 			"property_type": property_type,
 		}
 	).insert(ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
+# Multi-supplier management on Item: the native "Supplier Items" table
+# (Item Supplier child doctype) only ever carried `supplier` +
+# `supplier_part_no` -- enough to *list* several suppliers per Item, but no
+# way to tell a trader apart from a manufacturer, or mark which one is the
+# preferred source when several are on file. Both matter in practice once
+# create_request_for_quotation (inquiry.py) aggregates every supplier on an
+# Item's row for an RFQ blast to all of them at once.
+# ---------------------------------------------------------------------------
+
+# fieldname, label, fieldtype, grid column width, extra DocField kwargs
+ITEM_SUPPLIER_CUSTOM_FIELDS = (
+	(
+		"supplier_type",
+		"Supplier Type",
+		"Select",
+		2,
+		{"options": "Manufacturer\nTrader\nDistributor\nOther"},
+	),
+	(
+		"is_preferred_supplier",
+		"Preferred",
+		"Check",
+		1,
+		{},
+	),
+)
+
+
+def setup_item_supplier_customization():
+	if not frappe.db.exists("DocType", "Item Supplier"):
+		return
+
+	insert_after = "supplier_part_no"
+	for fieldname, label, fieldtype, columns, extra in ITEM_SUPPLIER_CUSTOM_FIELDS:
+		name = f"Item Supplier-{fieldname}"
+		field_dict = {
+			"doctype": "Custom Field",
+			"dt": "Item Supplier",
+			"fieldname": fieldname,
+			"label": label,
+			"fieldtype": fieldtype,
+			"insert_after": insert_after,
+			"in_list_view": 1,
+			"columns": columns,
+			**extra,
+		}
+
+		if frappe.db.exists("Custom Field", name):
+			cf = frappe.get_doc("Custom Field", name)
+			changed = False
+			for key, value in field_dict.items():
+				if key == "doctype":
+					continue
+				if cf.get(key) != value:
+					cf.set(key, value)
+					changed = True
+			if changed:
+				cf.save(ignore_permissions=True)
+		else:
+			frappe.get_doc(field_dict).insert(ignore_permissions=True)
+
+		insert_after = fieldname
 
 
 # ---------------------------------------------------------------------------

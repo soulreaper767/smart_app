@@ -392,6 +392,25 @@ Portal Settings to have Request for Quotation enabled) are explicit human
 steps, not automated — this reaches external suppliers, so a review
 checkpoint stays in the loop.
 
+**Managing multiple suppliers on an Item.** The native "Supplier Items"
+table on Item (Item Supplier child doctype) only ever carried `supplier` +
+`supplier_part_no` — enough to *list* several suppliers, but nothing to
+actually tell them apart. `setup_item_supplier_customization` in
+`install.py` adds two **Custom Fields** to it:
+- **Supplier Type** (`supplier_type`, Select: Manufacturer / Trader /
+  Distributor / Other) — so a mixed set of sources on one Item stays
+  legible at a glance.
+- **Preferred** (`is_preferred_supplier`, Check) — flags which one is the
+  default source when several are on file. `enforce_single_preferred_supplier`
+  (`utils.py`, hooked to Item's `validate`) keeps this to at most one row at
+  a time — checking a second one silently unchecks the earlier one rather
+  than blocking the save with an error.
+
+This doesn't change how RFQ generation itself works — `create_request_for_quotation`
+still blasts every supplier on every item regardless of type or preference,
+since "send RFQ to all of them" was the whole point; Preferred/Type are for
+a human scanning the Item form, not a filter on who gets contacted.
+
 `commercial_status` advances automatically and only ever forward (never
 backward, e.g. a second Quotation created after an RFQ already went out
 won't reset it): "Quotation Created" on the Quotation's `after_insert`,
