@@ -644,6 +644,44 @@ leaves existing records alone, so it's always safe to re-run, including via
 `bench --site <your-site> execute smart_app.install.setup` directly if you
 want to force it outside of a migrate.
 
+## Supplier database import
+
+The firm's existing supplier list (`data/Supplier_Import_2026.csv`, 345
+suppliers after de-duplication) is loaded automatically — **no manual Data
+Import needed**. `smart_app/patches/import_suppliers_2026.py` runs once on the
+first `bench migrate` after this app is pulled and calls
+`smart_app.supplier_import.import_suppliers`.
+
+It's built so the load can't error out on a missing linked record:
+
+- **Every Country the CSV references is created first if the site doesn't
+  have it** (`ensure_country`) — with an ISO code + primary timezone from
+  `KNOWN_COUNTRY_DATA`, the same shape ERPNext's own country seed uses, not a
+  bare name. `"Sultanate of Oman"` in the source data is mapped to the
+  canonical `"Oman"` record (via `COUNTRY_ALIASES`) so the supplier links to a
+  complete Country row; if `"Oman"` itself is missing it's created properly
+  instead. Two rows have a blank Country cell but an unambiguous India address
+  in their details — filled in explicitly via `COUNTRY_BY_SUPPLIER`.
+- **Supplier Group**: the CSV leaves it blank for every row, so each supplier
+  gets the Buying Settings default, or `"All Supplier Groups"` (created as the
+  root group, and set as the Buying Settings default, if the site has none).
+
+**Upsert, not insert-only.** A Supplier already on the site (matched by name)
+is updated in place with the CSV's `supplier_details` / country / type; one
+that isn't is created. The three duplicate rows in the source collapse to the
+first occurrence. `email_id` / `mobile_no` are only set when the supplier has
+none yet (they drive primary-contact creation on save), so re-runs don't churn
+contacts. Each row is written inside its own savepoint — a bad row goes to
+**Error Log** and is skipped, the rest still load.
+
+Re-run any time (idempotent), e.g. after editing the CSV:
+
+```bash
+bench --site <your-site> execute smart_app.supplier_import.import_suppliers
+# preview only, writes nothing:
+bench --site <your-site> execute smart_app.supplier_import.import_suppliers --kwargs "{'dry_run': True}"
+```
+
 ## Roadmap
 
 - Phase 3: commission automation for Marketers based on converted Inquiries.
