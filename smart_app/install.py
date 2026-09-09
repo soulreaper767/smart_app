@@ -31,6 +31,13 @@ COMMERCIAL_CARD_NAMES = [
 	"Submitted Inquiries",
 	"Unassigned Inquiries",
 	"Assigned Inquiries",
+	"Total Suppliers",
+]
+
+# Commercial-side Dashboard Charts (not Inquiry-based, so built separately from
+# CHART_NAMES / setup_dashboard_charts).
+COMMERCIAL_CHART_NAMES = [
+	"Suppliers by Country",
 ]
 
 COMMERCIAL_STATUSES = ["Unassigned", "Assigned", "Quotation Created", "RFQ Created", "RFQ Sent"]
@@ -151,6 +158,7 @@ COMMERCIAL_SHORTCUTS = [
 		"link_to": "Commercial Assignment Overview",
 		"color": "#3B82F6",
 	},
+	{"label": "Suppliers", "type": "DocType", "link_to": "Supplier", "doc_view": "List", "color": "#22C55E"},
 	{"label": "Quotations", "type": "DocType", "link_to": "Quotation", "doc_view": "List", "color": "#22C55E"},
 	{
 		"label": "Requests for Quotation",
@@ -165,6 +173,12 @@ COMMERCIAL_SHORTCUTS = [
 		"link_to": "Supplier Quotation",
 		"doc_view": "List",
 		"color": "#22C55E",
+	},
+	{
+		"label": "Commercial Dashboard",
+		"type": "Dashboard",
+		"link_to": "Commercial Dashboard",
+		"color": "#F97316",
 	},
 	{
 		"label": "Item Purchase History",
@@ -198,9 +212,11 @@ def setup():
 	run_step(setup_workflow, "workflow")
 	run_step(setup_kanban_board, "kanban board")
 	run_step(setup_dashboard_charts, "dashboard charts")
+	run_step(setup_commercial_charts, "commercial dashboard charts (suppliers)")
 	run_step(setup_number_cards, "number cards")
 	run_step(setup_commercial_overview, "commercial overview (cards + kanban + report)")
 	run_step(setup_dashboard, "dashboard")
+	run_step(setup_commercial_dashboard, "commercial dashboard")
 	run_step(setup_reports, "reports")
 	run_step(setup_print_format, "print format")
 	run_step(setup_workspace, "workspace")
@@ -682,6 +698,28 @@ def setup_dashboard_charts():
 		chart.insert(ignore_permissions=True)
 
 
+def setup_commercial_charts():
+	"""Commercial-side charts -- currently just a breakdown of the supplier
+	master (see smart_app.supplier_import) by country. Kept separate from
+	setup_dashboard_charts because these are not Inquiry-based (no
+	`based_on` date field), so they'd need special-casing in that loop."""
+	if not frappe.db.exists("DocType", "Supplier"):
+		return
+	if frappe.db.exists("Dashboard Chart", "Suppliers by Country"):
+		return
+	chart = frappe.new_doc("Dashboard Chart")
+	chart.chart_name = "Suppliers by Country"
+	chart.chart_type = "Group By"
+	chart.document_type = "Supplier"
+	chart.group_by_type = "Count"
+	chart.group_by_based_on = "country"
+	chart.type = "Donut"
+	chart.filters_json = json.dumps([["Supplier", "disabled", "=", 0]])
+	chart.is_public = 1
+	chart.module = MODULE
+	chart.insert(ignore_permissions=True)
+
+
 # ---------------------------------------------------------------------------
 # Number Cards (KPIs)
 # ---------------------------------------------------------------------------
@@ -709,12 +747,12 @@ def setup_number_cards():
 		_create_number_card(c["label"], c["function"], c["filters_json"])
 
 
-def _create_number_card(label, function, filters, aggregate_function_based_on=None):
+def _create_number_card(label, function, filters, aggregate_function_based_on=None, document_type="Inquiry"):
 	if frappe.db.exists("Number Card", label):
 		return
 	card = frappe.new_doc("Number Card")
 	card.label = label
-	card.document_type = "Inquiry"
+	card.document_type = document_type
 	card.type = "Document Type"
 	card.function = function
 	card.aggregate_function_based_on = aggregate_function_based_on
@@ -747,6 +785,13 @@ def setup_commercial_overview():
 		"Count",
 		[["Inquiry", "docstatus", "=", 1], ["Inquiry", "commercial_officer", "is", "set"]],
 	)
+	# The supplier master the Commercial team sends RFQs to (see
+	# smart_app.supplier_import) -- surfaced here so its size is visible
+	# alongside the pipeline it feeds.
+	if frappe.db.exists("DocType", "Supplier"):
+		_create_number_card(
+			"Total Suppliers", "Count", [["Supplier", "disabled", "=", 0]], document_type="Supplier"
+		)
 
 	# Only submitted Inquiries belong on this board -- otherwise every draft
 	# (still "Unassigned" by default before it's even handed to Commercial)
@@ -802,6 +847,27 @@ def setup_dashboard():
 		dashboard.append("charts", {"chart": chart})
 	for card in CARD_NAMES:
 		dashboard.append("cards", {"card": card})
+	dashboard.insert(ignore_permissions=True)
+
+
+def setup_commercial_dashboard():
+	"""A Commercial-team counterpart to the Inquiry Dashboard: the three
+	submitted/assigned/unassigned KPIs, the supplier-master count, and the
+	Suppliers-by-Country chart, on one page linked from the workspace's
+	Commercial Team section."""
+	if frappe.db.exists("Dashboard", "Commercial Dashboard"):
+		return
+
+	dashboard = frappe.new_doc("Dashboard")
+	dashboard.dashboard_name = "Commercial Dashboard"
+	dashboard.module = MODULE
+	dashboard.is_default = 0
+	for chart in COMMERCIAL_CHART_NAMES:
+		if frappe.db.exists("Dashboard Chart", chart):
+			dashboard.append("charts", {"chart": chart})
+	for card in COMMERCIAL_CARD_NAMES:
+		if frappe.db.exists("Number Card", card):
+			dashboard.append("cards", {"card": card})
 	dashboard.insert(ignore_permissions=True)
 
 
@@ -1368,6 +1434,16 @@ LINK_CARDS = [
 		],
 	},
 	{
+		"label": "Commercial",
+		"icon": "list",
+		"links": [
+			{"label": "Supplier", "link_type": "DocType", "link_to": "Supplier"},
+			{"label": "Quotation", "link_type": "DocType", "link_to": "Quotation"},
+			{"label": "Request for Quotation", "link_type": "DocType", "link_to": "Request for Quotation"},
+			{"label": "Supplier Quotation", "link_type": "DocType", "link_to": "Supplier Quotation"},
+		],
+	},
+	{
 		"label": "Reports",
 		"icon": "report",
 		"links": [
@@ -1515,7 +1591,7 @@ def _add_workspace_visuals(workspace):
 		content.append(
 			{"id": frappe.generate_hash(length=10), "type": "header", "data": {"text": charts_header, "col": 12}}
 		)
-	for chart in CHART_NAMES:
+	for chart in CHART_NAMES + COMMERCIAL_CHART_NAMES:
 		if chart not in existing_charts:
 			workspace.append("charts", {"chart_name": chart, "label": chart})
 		if not _has_content_block(content, "chart", chart_name=chart):

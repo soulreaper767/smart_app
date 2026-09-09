@@ -205,12 +205,14 @@ The **Smart App** workspace ships with:
 - **Links** (the classic ERPNext grouped-card section further down the
   page, `LINK_CARDS` in `install.py`): every doctype and report the app
   ships with, organised into **Inquiry** (the Inquiry doctype itself),
-  **Masters** (all four master lists), and **Reports** (both Query
+  **Masters** (all four master lists), **Commercial** (Supplier, Quotation,
+  Request for Quotation, Supplier Quotation), and **Reports** (both Query
   Reports) cards.
 - A **Commercial Team** section: the Commercial Pipeline Kanban (filtered to
-  submitted Inquiries only), the Commercial Assignment Overview report,
-  Quotation/Request for Quotation/Supplier Quotation lists, and the two
-  core purchase-history/comparison reports (see Phase 2 below).
+  submitted Inquiries only), the Commercial Assignment Overview report, the
+  **Suppliers** list, Quotation/Request for Quotation/Supplier Quotation
+  lists, the **Commercial Dashboard**, and the two core
+  purchase-history/comparison reports (see Phase 2 below).
 
 Every `content.append()` that builds these blocks is guarded by
 `_has_content_block` — checking whether that exact header/shortcut/chart/
@@ -349,11 +351,20 @@ any real deployment.
 
 - **Number Cards**: Submitted Inquiries, Unassigned Inquiries, Assigned
   Inquiries (all `docstatus = 1`, the "unassigned" one filtered by
-  `commercial_officer is not set`).
+  `commercial_officer is not set`), plus **Total Suppliers** (count of
+  non-disabled Supplier records — the master the RFQ blast targets, see
+  the supplier import below).
 - **Kanban Board** "Commercial Pipeline", grouped by `commercial_status`,
   filtered to submitted Inquiries only.
 - **Query Report** "Commercial Assignment Overview" — every submitted
   Inquiry with its Commercial Officer and status.
+- **Dashboard Chart** "Suppliers by Country" (`setup_commercial_charts`) —
+  a Group-By donut over the Supplier master, not Inquiry-based, so it's
+  built separately from the Inquiry charts.
+- **Dashboard** "Commercial Dashboard" (`setup_commercial_dashboard`) — the
+  four Number Cards above and the Suppliers-by-Country chart on one page,
+  the Commercial-team counterpart to the Inquiry Dashboard. Linked from the
+  workspace's Commercial Team section.
 
 Clicking any of the three Number Cards (Frappe's standard behaviour, not
 custom code) navigates to the Inquiry list pre-filtered to that card's exact
@@ -362,9 +373,9 @@ criteria — e.g. clicking **Assigned Inquiries** shows only those, and since
 you see who each one is assigned to and its status right there without
 opening each record.
 
-All three (plus shortcuts to Quotation/RFQ/Supplier Quotation lists and the
-two core reports below) live under a **Commercial Team** section on the
-Smart App workspace.
+All of these (plus shortcuts to the Suppliers, Quotation, RFQ and Supplier
+Quotation lists, the Commercial Dashboard, and the two core reports below)
+live under a **Commercial Team** section on the Smart App workspace.
 
 ## Quotation → Request for Quotation pipeline
 
