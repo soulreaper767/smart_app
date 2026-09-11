@@ -2,3 +2,4 @@
 
 [post_model_sync]
 smart_app.patches.import_suppliers_2026
+smart_app.patches.switch_currency_to_usd

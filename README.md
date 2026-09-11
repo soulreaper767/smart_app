@@ -693,6 +693,51 @@ leaves existing records alone, so it's always safe to re-run, including via
 `bench --site <your-site> execute smart_app.install.setup` directly if you
 want to force it outside of a migrate.
 
+## Default currency switched to USD
+
+`smart_app.currency_migration.switch_default_currency` runs once,
+automatically, via `smart_app/patches/switch_currency_to_usd.py` on the
+first `bench migrate` after this app is pulled — switching the site's
+default currency to **USD everywhere this app touches currency, including
+already-created and already-submitted documents**:
+
+- **Global Defaults** and every **Company**'s `default_currency` — set via
+  direct `frappe.db.set_value`, not `doc.save()`, since `Company.validate()`
+  refuses to change it once the company has any GL Entry (this was asked
+  for despite that).
+- Every **Price List** (the ones auto-created per Customer/Supplier, the
+  two core Standard Buying/Selling lists, and any other the site has) and
+  every **Item Price**'s own stored `currency`.
+- **Quotation** and **Supplier Quotation** — `currency` and
+  `price_list_currency`, at every docstatus (draft, submitted, cancelled),
+  via raw SQL rather than `doc.save()` (which Frappe blocks on an
+  already-submitted document by design). **Request for Quotation** has no
+  `currency` field of its own — it's a request, sent before any party has
+  quoted a price — so there's nothing to change there.
+
+**This is a relabel, not a conversion**: every rate/amount number is left
+exactly as typed, only the currency tag changes — `conversion_rate` /
+`plc_conversion_rate` / `base_*` fields are deliberately untouched, since
+recomputing them without a real exchange rate would be a guess, not a fix.
+A Quotation quoted at `5000` in the old currency reads `5000 USD` after
+this runs — the number doesn't change, only its label.
+
+**Deliberately not touched**: Purchase Order, Sales Invoice, Purchase
+Invoice, Payment Entry, and GL Entry — this app never creates or owns those
+records (Purchase Order is granted select+read only, for reference — see
+`grant_commercial_access`), and relabeling a *posted* accounting document's
+currency without also reworking its GL Entries is a books-integrity risk
+outside this app's remit.
+
+Idempotent — checks the current value everywhere before writing, so
+re-running is always safe:
+
+```bash
+bench --site <your-site> execute smart_app.currency_migration.switch_default_currency
+# a different target currency:
+bench --site <your-site> execute smart_app.currency_migration.switch_default_currency --kwargs "{'target_currency': 'EUR'}"
+```
+
 ## Supplier database import
 
 The firm's existing supplier list (`data/Supplier_Import_2026.csv`, 345
