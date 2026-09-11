@@ -8,6 +8,8 @@ from frappe.model.mapper import get_mapped_doc
 from frappe.contacts.doctype.contact.contact import get_default_contact
 from frappe.contacts.doctype.address.address import get_default_address
 
+from smart_app.smart_app.utils import get_default_warehouse_for_company
+
 
 class Inquiry(Document):
 	def validate(self):
@@ -358,6 +360,46 @@ def make_quotation(source_name, target_doc=None):
 	return doclist
 
 
+def _append_rfq_item(rfq, source_row):
+	"""Shared by both create_request_for_quotation and
+	get_request_for_quotation_data below: append one Quotation Item's data
+	as a Request for Quotation Item row.
+
+	Sets `warehouse` deliberately -- ERPNext's own
+	erpnext.buying.utils.validate_stock_item_warehouse throws "Row #{n}:
+	Warehouse is mandatory for stock Item {item}" on *every* save (not just
+	submit) of a Request for Quotation whose Item is a stock Item with a qty
+	but no warehouse on its row (RequestForQuotation.validate calls
+	validate_for_items unconditionally). Every Item quick-created from this
+	app's own Item Link fields defaults "Maintain Stock" on (see
+	ensure_item_default_warehouse in utils.py), so a row built without a
+	warehouse here would fail that check immediately on insert."""
+	item = frappe.db.get_value(
+		"Item", source_row.item_code, ["stock_uom", "is_stock_item"], as_dict=True
+	)
+	if not item:
+		return
+
+	warehouse = None
+	if item.is_stock_item:
+		warehouse = frappe.db.get_value(
+			"Item Default", {"parent": source_row.item_code, "company": rfq.company}, "default_warehouse"
+		) or get_default_warehouse_for_company(rfq.company)
+
+	rfq.append(
+		"items",
+		{
+			"item_code": source_row.item_code,
+			"qty": source_row.qty,
+			"schedule_date": frappe.utils.add_days(frappe.utils.today(), 7),
+			"uom": item.stock_uom,
+			"stock_uom": item.stock_uom,
+			"conversion_factor": 1,
+			"warehouse": warehouse,
+		},
+	)
+
+
 def _populate_rfq_suppliers_and_template(rfq):
 	"""Shared by both directions of Quotation <-> Request for Quotation
 	generation (create_request_for_quotation and make_request_for_quotation
@@ -447,19 +489,7 @@ def create_request_for_quotation(quotation_name):
 	for row in quotation.items:
 		if not row.item_code:
 			continue
-
-		stock_uom = frappe.db.get_value("Item", row.item_code, "stock_uom")
-		rfq.append(
-			"items",
-			{
-				"item_code": row.item_code,
-				"qty": row.qty,
-				"schedule_date": frappe.utils.add_days(frappe.utils.today(), 7),
-				"uom": stock_uom,
-				"stock_uom": stock_uom,
-				"conversion_factor": 1,
-			},
-		)
+		_append_rfq_item(rfq, row)
 
 	_populate_rfq_suppliers_and_template(rfq)
 
@@ -531,18 +561,7 @@ def get_request_for_quotation_data(quotation_name):
 	for row in quotation.items:
 		if not row.item_code:
 			continue
-		stock_uom = frappe.db.get_value("Item", row.item_code, "stock_uom")
-		rfq.append(
-			"items",
-			{
-				"item_code": row.item_code,
-				"qty": row.qty,
-				"schedule_date": frappe.utils.add_days(frappe.utils.today(), 7),
-				"uom": stock_uom,
-				"stock_uom": stock_uom,
-				"conversion_factor": 1,
-			},
-		)
+		_append_rfq_item(rfq, row)
 
 	_populate_rfq_suppliers_and_template(rfq)
 
@@ -564,6 +583,7 @@ def get_request_for_quotation_data(quotation_name):
 				"uom": d.uom,
 				"stock_uom": d.stock_uom,
 				"conversion_factor": d.conversion_factor,
+				"warehouse": d.warehouse,
 			}
 			for d in rfq.items
 		],

@@ -187,6 +187,76 @@ def enforce_single_preferred_supplier(doc, method=None):
 				seen_preferred = True
 
 
+def get_default_warehouse_for_company(company):
+	"""Best-effort resolution of a company's default Warehouse. Used both by
+	ensure_item_default_warehouse below and by inquiry.py's RFQ item builder
+	(create_request_for_quotation / get_request_for_quotation_data) to fill
+	in a row's `warehouse` -- ERPNext's own erpnext.buying.utils.
+	validate_stock_item_warehouse throws "Row #{n}: Warehouse is mandatory
+	for stock Item {item}" the instant a stock Item's row has a qty but no
+	warehouse, on *every* save (not just submit) of Request for Quotation,
+	Supplier Quotation, or Purchase Order (see RequestForQuotation.validate /
+	SupplierQuotation.validate, both of which call validate_for_items
+	unconditionally)."""
+	if not company:
+		return None
+
+	stock_settings_warehouse = frappe.db.get_single_value("Stock Settings", "default_warehouse")
+	if (
+		stock_settings_warehouse
+		and frappe.db.get_value("Warehouse", stock_settings_warehouse, "company") == company
+	):
+		return stock_settings_warehouse
+
+	# Every Company gets a "Stores - <abbr>" warehouse created automatically
+	# by core ERPNext when the Company itself is created -- the standard
+	# default target if Stock Settings doesn't name one explicitly.
+	stores = frappe.db.get_value(
+		"Warehouse", {"company": company, "warehouse_name": "Stores", "disabled": 0}, "name"
+	)
+	if stores:
+		return stores
+
+	return frappe.db.get_value(
+		"Warehouse",
+		{"company": company, "is_group": 0, "disabled": 0},
+		"name",
+		order_by="creation asc",
+	)
+
+
+def ensure_item_default_warehouse(doc, method=None):
+	"""Item.validate: give a stock Item a default Warehouse for the site's
+	default Company if it doesn't have one, so it never trips ERPNext's own
+	"Warehouse is mandatory for stock Item" validation the moment it's used
+	with a qty on a Request for Quotation / Supplier Quotation / Purchase
+	Order (see get_default_warehouse_for_company above for exactly which
+	core check this is).
+
+	Every Item quick-created from an Item Link field in this app (Inquiry
+	Item / Quotation Item / RFQ Item -- see grant_master_data_access in
+	install.py, "a NPD Inquiry is often about an item that doesn't exist
+	yet") defaults "Maintain Stock" ON with an empty Item Defaults table --
+	core ERPNext's own backfill for that (update_defaults_from_item_group in
+	erpnext/stock/doctype/item/item.py) only pulls from the *current user's*
+	personal default warehouse (frappe.defaults.get_defaults()), which no
+	Inquiry/Commercial role here has ever had a reason to set. Filled in here
+	instead, for the site's global default Company only -- least-surprise,
+	and doesn't invent defaults for companies this app was never told about."""
+	if not doc.is_stock_item:
+		return
+
+	company = frappe.defaults.get_global_default("company")
+	if not company:
+		return
+	if any(d.company == company for d in doc.get("item_defaults") or []):
+		return
+
+	warehouse = get_default_warehouse_for_company(company)
+	if warehouse:
+		doc.append("item_defaults", {"company": company, "default_warehouse": warehouse})
+
+
 def ensure_default_price_list(party_doctype, party_name, display_name):
 	"""Give a Customer/Supplier its own dedicated Price List, so "multiple
 	sales and purchase prices for the same item" falls out naturally --

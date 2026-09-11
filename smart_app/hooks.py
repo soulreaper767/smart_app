@@ -77,7 +77,10 @@ doc_events = {
 		"on_submit": "smart_app.smart_app.utils.sync_item_prices_from_supplier_quotation",
 	},
 	"Item": {
-		"validate": "smart_app.smart_app.utils.enforce_single_preferred_supplier",
+		"validate": [
+			"smart_app.smart_app.utils.enforce_single_preferred_supplier",
+			"smart_app.smart_app.utils.ensure_item_default_warehouse",
+		],
 	},
 	"Customer": {
 		"after_insert": "smart_app.smart_app.utils.create_default_price_list_for_customer",

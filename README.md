@@ -556,6 +556,44 @@ in `inquiry.py` — mirror
 supplier/contact lookup pattern from ERPNext's own
 `request_for_quotation.py`, respectively.
 
+### "Warehouse is mandatory for stock Item"
+
+A stock Item (`is_stock_item = 1`, the default — including every Item
+quick-created inline from this app's own Item Link fields, per **Access to
+every doctype Inquiry links to** above) trips ERPNext's own
+`erpnext.buying.utils.validate_stock_item_warehouse` the instant its row has
+a qty but no `warehouse` — thrown as `"Row #{n}: Warehouse is mandatory for
+stock Item {item}"` on **every save** (not just submit) of a **Request for
+Quotation** or **Supplier Quotation**, since both call this unconditionally
+from their own `validate()`. **Quotation itself is unaffected** (Selling
+side, no such check).
+
+Two coordinated fixes, both self-healing on migrate:
+- `create_request_for_quotation` / `get_request_for_quotation_data`
+  (`inquiry.py`) now set `warehouse` on every RFQ item row they build
+  (`_append_rfq_item`, shared by both) — the row-level field ERPNext's check
+  actually looks at, which this app's own RFQ builders previously left
+  blank. `get_request_for_quotation_data`'s response also now carries
+  `warehouse` so the reverse "Get Items From → Quotation" button (which
+  fills an already-open RFQ client-side, see above) picks it up too.
+- `ensure_item_default_warehouse` (`utils.py`, `Item.validate`) gives a
+  stock Item a default Warehouse for the site's default Company if it has
+  none — core ERPNext's own backfill for this
+  (`update_defaults_from_item_group`) only pulls from the *current user's*
+  personal default warehouse, which no Inquiry/Commercial role here has ever
+  had a reason to set, so a quick-created Item otherwise ends up with an
+  empty Item Defaults table. This is what makes a **manually** added
+  Supplier Quotation row auto-fill its warehouse the moment the Item is
+  picked (core `get_item_details` reads Item Defaults), and it's also the
+  fallback `_append_rfq_item` uses for an item that has none of its own.
+  `backfill_item_default_warehouse` (`install.py`) applies the same fix to
+  every stock Item that already existed before this shipped.
+
+Warehouse resolution (`get_default_warehouse_for_company`, `utils.py`):
+Stock Settings' own default warehouse if it belongs to the company, else
+that company's auto-created `"Stores"` warehouse, else its first
+non-group/non-disabled Warehouse.
+
 ## Item master columns everywhere in the pipeline
 
 `setup_item_master_columns` surfaces three Item-master fields as visible

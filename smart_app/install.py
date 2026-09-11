@@ -230,6 +230,7 @@ def setup():
 	run_step(backfill_commercial_manager_inquiry_user_role, "backfill Inquiry User role for Commercial Manager")
 	run_step(backfill_commercial_status, "backfill blank/stuck commercial_status on existing Inquiries")
 	run_step(backfill_party_price_lists, "backfill default Price Lists for existing Customers/Suppliers")
+	run_step(backfill_item_default_warehouse, "backfill default warehouse on existing stock Items")
 	run_step(backfill_rfq_quotation_links, "backfill quotation link on existing Requests for Quotation")
 	run_step(setup_email_branding, "email footer branding")
 	run_step(setup_email_templates, "RFQ email template")
@@ -1920,6 +1921,34 @@ def backfill_party_price_lists():
 	for supplier in frappe.get_all("Supplier", fields=["name", "supplier_name", "default_price_list"]):
 		if not supplier.default_price_list:
 			ensure_default_price_list("Supplier", supplier.name, supplier.supplier_name or supplier.name)
+
+
+def backfill_item_default_warehouse():
+	"""ensure_item_default_warehouse (utils.py, Item.validate) only fixes up a
+	stock Item's Item Defaults on that Item's own next save -- so any stock
+	Item created before this fix shipped (or simply never re-saved since)
+	still has none, and will trip ERPNext's own "Warehouse is mandatory for
+	stock Item" validation the next time it's used with a qty on a Request
+	for Quotation, Supplier Quotation, or Purchase Order. Same gap, applied
+	directly to every existing stock Item that's missing a default for the
+	site's global default Company."""
+	from smart_app.smart_app.utils import get_default_warehouse_for_company
+
+	company = frappe.defaults.get_global_default("company")
+	if not company:
+		return
+
+	warehouse = get_default_warehouse_for_company(company)
+	if not warehouse:
+		return
+
+	stock_items = frappe.get_all("Item", filters={"is_stock_item": 1, "disabled": 0}, pluck="name")
+	for item_code in stock_items:
+		if frappe.db.exists("Item Default", {"parent": item_code, "company": company}):
+			continue
+		item = frappe.get_doc("Item", item_code)
+		item.append("item_defaults", {"company": company, "default_warehouse": warehouse})
+		item.save(ignore_permissions=True)
 
 
 def backfill_rfq_quotation_links():
