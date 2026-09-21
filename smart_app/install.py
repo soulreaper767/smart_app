@@ -1647,162 +1647,286 @@ def setup_print_format():
 
 
 # ---------------------------------------------------------------------------
-# Indent Print Format -- laid out to match the firm's own indent_template.pdf
-# exactly (content and structure; the letterhead/logo/NTN header at the top
-# of that PDF is left to the site's own Letter Head, not baked in here).
+# Indent Print Format -- the same content and section structure as the
+# firm's own indent_template.pdf (seller/buyer, item table, trade-terms
+# grid, bank details, the three clause blocks, shipping marks, signatures),
+# restyled as a proper corporate document: one type scale, one border/
+# color system (a single accent colour used for section bars and the
+# totals rule), sentence case on the clause paragraphs instead of a wall of
+# capitals -- with the handful of terms the template itself bolds (30 days,
+# 85% shelf-life, "OUR") kept bold -- and comma-formatted currency values.
+# The letterhead/logo/NTN header at the top of that PDF is left to the
+# site's own Letter Head, not baked in here.
+#
 # The FOR BANKER / FOR BUYER / FOR SHIPPER clauses and the Shipping Marks
-# wording are deliberately hardcoded, not doc fields -- the whole point
-# (see the task this was built for) is that they read identically on every
-# single Indent; only {{ doc.customer_name }} varies in the Shipping Marks
-# block, exactly as in the source template.
+# wording are still hardcoded, not doc fields -- the whole point (see the
+# task this was built for) is that they read identically on every single
+# Indent; only {{ doc.customer_name }} varies in the Shipping Marks block,
+# exactly as in the source template. Set as Indent's `default_print_format`
+# (indent.json) so it's what opens automatically on Print/PDF.
 # ---------------------------------------------------------------------------
 
 
 def setup_indent_print_format():
 	html = r"""
-<div class="indent-print" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #111;">
+<div class="indent-print">
 <style>
-	.indent-print table { border-collapse: collapse; width: 100%; margin-bottom: 6px; }
-	.indent-print th, .indent-print td { border: 1px solid #333; padding: 4px 6px; vertical-align: top; }
-	.indent-print th { background: #e9ecef; text-align: left; }
-	.indent-print .label-cell { font-weight: bold; width: 18%; background: #f6f6f6; }
-	.indent-print .no-border td, .indent-print .no-border th { border: none; padding: 2px 0; }
-	.indent-print h2 { text-align: center; text-decoration: underline; margin: 4px 0 10px; }
+	.indent-print {
+		font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+		font-size: 10.5px;
+		line-height: 1.55;
+		color: #1e293b;
+	}
+	.indent-print b, .indent-print strong { color: #0f172a; }
+
+	.indent-print .doc-title {
+		text-align: center;
+		font-size: 21px;
+		font-weight: 700;
+		letter-spacing: 4px;
+		color: #0f172a;
+		margin: 0 0 16px;
+		padding-bottom: 10px;
+		border-bottom: 2.5px solid #0f6e51;
+	}
+
+	.indent-print table {
+		border-collapse: collapse;
+		width: 100%;
+		margin-bottom: 12px;
+	}
+	.indent-print th, .indent-print td {
+		border: 1px solid #d4dae2;
+		padding: 6px 9px;
+		vertical-align: top;
+	}
+
+	/* Section header bar -- one per block (Seller/Buyer, Items, Terms, etc). */
+	.indent-print .section-head {
+		background: #0f6e51;
+		color: #ffffff;
+		font-size: 9.5px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 1px;
+		padding: 5px 9px;
+		border: 1px solid #0f6e51;
+	}
+
+	.indent-print .label-cell {
+		font-weight: 600;
+		width: 22%;
+		background: #f8fafb;
+		color: #55606e;
+		font-size: 9px;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+	}
+	.indent-print .party-name { font-size: 11.5px; font-weight: 700; }
+	.indent-print .party-address { color: #475569; }
+
+	.indent-print .items-table th {
+		background: #f8fafb;
+		color: #55606e;
+		font-size: 9px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+		text-align: left;
+	}
+	.indent-print .items-table td.num, .indent-print .items-table th.num { text-align: right; }
+	.indent-print .items-table .item-desc { color: #64748b; font-size: 9.7px; font-style: italic; }
+	.indent-print .total-row td {
+		border-top: 1.5px solid #0f6e51;
+		background: #f4faf7;
+		font-weight: 700;
+		font-size: 11px;
+	}
+
+	.indent-print .clause-label {
+		text-align: center;
+		font-weight: 700;
+		font-size: 9.5px;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+		color: #0f6e51;
+		background: #f4faf7;
+		width: 13%;
+	}
+	.indent-print .clause-text { font-size: 9.8px; line-height: 1.65; }
+	.indent-print .clause-text + .clause-text { margin-top: 6px; }
+	.indent-print .shipping-marks { text-align: center; }
+
+	.indent-print .signature-row td {
+		border: none;
+		padding-top: 34px;
+	}
+	.indent-print .signature-row .signature-line {
+		border-top: 1px solid #0f172a;
+		padding-top: 6px;
+		font-weight: 600;
+		font-size: 9px;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+		color: #334155;
+	}
+
+	.indent-print .terms-note { font-size: 9.8px; color: #334155; }
+	.indent-print .terms-note .heading {
+		display: block;
+		font-size: 9.5px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+		color: #0f6e51;
+		margin-bottom: 3px;
+	}
 </style>
 
-<h2>INDENT</h2>
+<div class="doc-title">Indent</div>
 
 <table>
 	<tr>
-		<td class="label-cell">INDENT NO</td>
-		<td>{{ doc.name }}</td>
-		<td class="label-cell">DATE</td>
+		<td class="label-cell" style="width: 16%;">Indent No</td>
+		<td><b>{{ doc.name }}</b></td>
+		<td class="label-cell" style="width: 12%;">Date</td>
 		<td>{{ frappe.utils.formatdate(doc.indent_date) }}</td>
 	</tr>
 </table>
 
 <table>
 	<tr>
-		<th style="width: 50%">SELLER:</th>
-		<th>BUYER:</th>
+		<td class="section-head" style="width: 50%;">Seller</td>
+		<td class="section-head">Buyer</td>
 	</tr>
 	<tr>
 		<td>
-			<b>{{ doc.supplier_name or "" }}</b><br>
-			{{ (doc.seller_address_display or "").replace("\n", "<br>") | safe }}
+			<div class="party-name">{{ doc.supplier_name or "" }}</div>
+			<div class="party-address">{{ (doc.seller_address_display or "").replace("\n", "<br>") | safe }}</div>
 		</td>
 		<td>
-			<b>{{ doc.customer_name or "" }}</b><br>
-			{{ (doc.customer_address_display or "").replace("\n", "<br>") | safe }}
+			<div class="party-name">{{ doc.customer_name or "" }}</div>
+			<div class="party-address">{{ (doc.customer_address_display or "").replace("\n", "<br>") | safe }}</div>
 		</td>
 	</tr>
 </table>
 
-<table>
+<table class="items-table">
 	<tr>
-		<th>PRODUCT DESCRIPTION</th>
-		<th style="width: 10%">HS CODE</th>
-		<th style="width: 12%">QUANTITY</th>
-		<th style="width: 15%">UNIT PRICE {{ doc.currency }}</th>
-		<th style="width: 15%">TOTAL VALUE {{ doc.currency }}</th>
+		<td class="section-head" colspan="5">Items</td>
+	</tr>
+	<tr>
+		<th>Product Description</th>
+		<th style="width: 11%">HS Code</th>
+		<th class="num" style="width: 13%">Quantity</th>
+		<th class="num" style="width: 15%">Unit Price ({{ doc.currency }})</th>
+		<th class="num" style="width: 16%">Total Value ({{ doc.currency }})</th>
 	</tr>
 	{% for row in doc.items %}
 	<tr>
-		<td>{{ row.item_name or row.item_code }}{% if row.description %}<br><i>({{ row.description }})</i>{% endif %}</td>
+		<td>
+			{{ row.item_name or row.item_code }}
+			{% if row.description %}<div class="item-desc">{{ row.description }}</div>{% endif %}
+		</td>
 		<td>{{ row.hs_code or "" }}</td>
-		<td>{{ row.qty }} {{ row.uom or "" }}</td>
-		<td>{{ "%.2f"|format(row.rate or 0) }}</td>
-		<td>{{ "%.2f"|format(row.amount or 0) }}</td>
+		<td class="num">{{ row.qty }} {{ row.uom or "" }}</td>
+		<td class="num">{{ "{:,.2f}".format(row.rate or 0) }}</td>
+		<td class="num">{{ "{:,.2f}".format(row.amount or 0) }}</td>
 	</tr>
 	{% endfor %}
-	<tr>
-		<td colspan="4" style="text-align: right;"><b>TOTAL VALUE NET TO SUPPLIER {{ doc.currency }}</b></td>
-		<td><b>{{ "%.2f"|format(doc.total_amount or 0) }}</b></td>
+	<tr class="total-row">
+		<td colspan="4" style="text-align: right;">Total Value Net to Supplier ({{ doc.currency }})</td>
+		<td class="num">{{ "{:,.2f}".format(doc.total_amount or 0) }}</td>
 	</tr>
 </table>
 
 <table>
-	<tr><td colspan="6"><b>TERMS &amp; CONDITIONS:</b></td></tr>
+	<tr><td class="section-head" colspan="6">Terms &amp; Conditions</td></tr>
 	<tr>
-		<td class="label-cell">PAYMENT TERMS</td><td>{{ doc.payment_terms or "" }}</td>
-		<td class="label-cell">INCOTERM</td><td>{{ doc.incoterm or "" }}</td>
-		<td class="label-cell">LEAD TIME</td><td>{{ doc.lead_time or "" }}</td>
+		<td class="label-cell">Payment Terms</td><td>{{ doc.payment_terms or "" }}</td>
+		<td class="label-cell">Incoterm</td><td>{{ doc.incoterm or "" }}</td>
+		<td class="label-cell">Lead Time</td><td>{{ doc.lead_time or "" }}</td>
 	</tr>
 	<tr>
-		<td class="label-cell">PORT OF LOADING</td><td>{{ doc.port_of_loading or "" }}</td>
-		<td class="label-cell">TRANS-SHIPMENT</td><td>{{ doc.trans_shipment or "" }}</td>
+		<td class="label-cell">Port of Loading</td><td>{{ doc.port_of_loading or "" }}</td>
+		<td class="label-cell">Trans-Shipment</td><td>{{ doc.trans_shipment or "" }}</td>
 		<td class="label-cell">GMP</td><td>{{ doc.gmp_availability or "" }}</td>
 	</tr>
 	<tr>
-		<td class="label-cell">DESTINATION</td><td>{{ doc.destination or "" }}</td>
-		<td class="label-cell">PARTIAL SHIPMENT</td><td>{{ doc.partial_shipment or "" }}</td>
+		<td class="label-cell">Destination</td><td>{{ doc.destination or "" }}</td>
+		<td class="label-cell">Partial Shipment</td><td>{{ doc.partial_shipment or "" }}</td>
 		<td class="label-cell">FTA</td><td>{{ doc.fta_availability or "" }}</td>
 	</tr>
 	<tr>
-		<td class="label-cell">ORIGIN</td><td>{{ doc.origin or "" }}</td>
-		<td class="label-cell">PACKING</td><td>{{ doc.packing or "" }}</td>
+		<td class="label-cell">Origin</td><td>{{ doc.origin or "" }}</td>
+		<td class="label-cell">Packing</td><td>{{ doc.packing or "" }}</td>
 		<td class="label-cell">WS</td><td>{{ doc.ws_availability or "" }}</td>
 	</tr>
 </table>
 
 <table>
-	<tr><td colspan="2"><b>BANK DETAILS:</b></td></tr>
-	<tr><td class="label-cell">BENEFICIARY NAME</td><td>{{ doc.bank_beneficiary_name or "" }}</td></tr>
-	<tr><td class="label-cell">BANK NAME</td><td>{{ doc.bank_name or "" }}</td></tr>
-	<tr><td class="label-cell">BANK ADDRESS</td><td>{{ doc.bank_address or "" }}</td></tr>
-	<tr><td class="label-cell">ACCOUNT NO</td><td>{{ doc.bank_account_no or "" }}</td></tr>
-	<tr><td class="label-cell">SWIFT CODE</td><td>{{ doc.swift_code or "" }}</td></tr>
+	<tr><td class="section-head" colspan="2">Bank Details</td></tr>
+	<tr><td class="label-cell">Beneficiary Name</td><td>{{ doc.bank_beneficiary_name or "" }}</td></tr>
+	<tr><td class="label-cell">Bank Name</td><td>{{ doc.bank_name or "" }}</td></tr>
+	<tr><td class="label-cell">Bank Address</td><td>{{ doc.bank_address or "" }}</td></tr>
+	<tr><td class="label-cell">Account No</td><td>{{ doc.bank_account_no or "" }}</td></tr>
+	<tr><td class="label-cell">SWIFT Code</td><td>{{ doc.swift_code or "" }}</td></tr>
 </table>
 
 <table>
 	<tr>
-		<td class="label-cell" style="text-align: center;">FOR<br>BANKER</td>
-		<td>
-			<b>VALIDITY:</b> THIS INDENT IS VALID FOR 30 DAYS FROM THE DATE OF ISSUE FOR ESTABLISHING THE BANK
-			INSTRUMENT. THIS BANK INSTRUMENT MUST REMAIN VALID FOR 90 DAYS AND AN ADDITIONAL 15 DAYS FOR NEGOTIATION.<br>
-			<b>PAYMENT CLAUSE (71A):</b> CLAUSE 71A MUST INDICATE "OUR" AT THE TIME OF PAYMENT REMITTANCE TO ENSURE
-			THAT THE NET AMOUNT IS RECEIVED BY THE BENEFICIARY/SUPPLIER WITHOUT ANY DEDUCTIONS.
+		<td class="clause-label">For<br>Banker</td>
+		<td class="clause-text">
+			<b>Validity:</b> This indent is valid for 30 days from the date of issue for establishing the bank
+			instrument. This bank instrument must remain valid for 90 days and an additional 15 days for negotiation.
+			<div class="clause-text"><b>Payment clause (71A):</b> Clause 71A must indicate &ldquo;OUR&rdquo; at the
+			time of payment remittance to ensure that the net amount is received by the beneficiary/supplier without
+			any deductions.</div>
 		</td>
 	</tr>
 	<tr>
-		<td class="label-cell" style="text-align: center;">FOR<br>BUYER</td>
-		<td>
-			ANY DISCREPANCY REGARDING THE QUALITY OR QUANTITY OF THE MATERIAL MUST BE COMMUNICATED WITHIN 30 DAYS
-			OF THE MATERIAL'S ARRIVAL.<br>
-			ANY QUALITY-RELATED DISCREPANCY MUST BE SUPPORTED BY A TEST REPORT BASED ON A MUTUALLY AGREED METHOD
-			OF TESTING.
+		<td class="clause-label">For<br>Buyer</td>
+		<td class="clause-text">
+			Any discrepancy regarding the quality or quantity of the material must be communicated within
+			<b>30 days</b> of the material's arrival.
+			<div class="clause-text">Any quality-related discrepancy must be supported by a test report based on a
+			mutually agreed method of testing.</div>
 		</td>
 	</tr>
 	<tr>
-		<td class="label-cell" style="text-align: center;">FOR<br>SHIPPER</td>
-		<td>
-			THE MATERIAL MUST HAVE A MINIMUM OF 85% SHELF-LIFE REMAINING AT THE TIME OF ARRIVAL AT THE DESTINATION
-			PORT TO ENSURE COMPLIANCE WITH THE IMPORT POLICY OF PAKISTAN.<br>
-			NON-NEGOTIABLE DOCUMENTS INCLUDING INVOICE, PACKING LIST, COA, GMP, FORM 3, FORM 7, FTA &amp; AWB MUST
-			BE EMAILED TO THE AGENT FOR APPROVAL PRIOR TO SHIPMENT.<br>
-			THE BUYER'S NTN NUMBER MUST BE CLEARLY MENTIONED ON THE AIRWAY BILL (AWB) OR BILL OF LADING (AWB).<br>
-			THE ORIGINAL INVOICE AND PACKING LIST MUST BE AFFIXED TO EACH DRUM, CARTON, TIN, OR BOX TO AVOID ANY
-			PENALTY CHARGES.
+		<td class="clause-label">For<br>Shipper</td>
+		<td class="clause-text">
+			The material must have a minimum of <b>85% shelf-life</b> remaining at the time of arrival at the
+			destination port to ensure compliance with the import policy of Pakistan.
+			<div class="clause-text">Non-negotiable documents including invoice, packing list, COA, GMP, Form 3,
+			Form 7, FTA &amp; AWB must be emailed to the agent for approval prior to shipment.</div>
+			<div class="clause-text">The buyer's NTN number must be clearly mentioned on the Airway Bill (AWB) or
+			Bill of Lading.</div>
+			<div class="clause-text">The original invoice and packing list must be affixed to each drum, carton,
+			tin, or box to avoid any penalty charges.</div>
 		</td>
 	</tr>
 	<tr>
-		<td class="label-cell" style="text-align: center;">SHIPPING<br>MARKS:</td>
-		<td style="text-align: center;">
-			<b>BENEFICIARY NAME &amp; ORIGIN</b><br>
-			{{ doc.customer_name or "" }} / {{ doc.company }} / LAHORE<br>
-			<b>MATERIAL NAME</b> NET &amp; GROSS WEIGHT, QUANTITY, BATCH NO, MFG DATE &amp; EXPIRY DATE
+		<td class="clause-label">Shipping<br>Marks</td>
+		<td class="clause-text shipping-marks">
+			<b>Beneficiary Name &amp; Origin</b><br>
+			{{ doc.customer_name or "" }} / {{ doc.company }} / Lahore<br><br>
+			<b>Material Name</b> &mdash; Net &amp; Gross Weight, Quantity, Batch No, Mfg Date &amp; Expiry Date
 		</td>
 	</tr>
 </table>
 
 {% if doc.terms %}
-<div style="margin-top: 8px;"><b>GENERAL TERMS AND CONDITIONS:</b><br>{{ doc.terms }}</div>
+<div class="terms-note">
+	<span class="heading">General Terms and Conditions</span>
+	{{ doc.terms }}
+</div>
 {% endif %}
 
-<table class="no-border" style="margin-top: 30px;">
-	<tr>
-		<td style="width: 50%; border-top: 1px solid #333; padding-top: 4px;"><b>INDENTOR SEAL &amp; SIGNATURE</b></td>
-		<td style="border-top: 1px solid #333; padding-top: 4px;"><b>BUYER'S SEAL &amp; SIGNATURE</b></td>
+<table>
+	<tr class="signature-row">
+		<td style="width: 50%;"><div class="signature-line">Indentor Seal &amp; Signature</div></td>
+		<td><div class="signature-line">Buyer's Seal &amp; Signature</div></td>
 	</tr>
 </table>
 </div>

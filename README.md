@@ -593,9 +593,9 @@ to every Supplier that already existed before these fields shipped — all
 for a brand-new Supplier is the more robust path; the text-parsing is a
 one-time convenience, not something new data needs to keep matching.
 
-**Fixed clauses and shipping marks, exactly as asked.** The **FOR
-BANKER** / **FOR BUYER** / **FOR SHIPPER** clause blocks and the
-**SHIPPING MARKS** wording are hardcoded directly into the **Indent
+**Fixed clauses and shipping marks, exactly as asked.** The **For
+Banker** / **For Buyer** / **For Shipper** clause blocks and the
+**Shipping Marks** wording are hardcoded directly into the **Indent
 Standard** print format (`setup_indent_print_format`), not doctype fields —
 the whole point is that they read identically on *every* Indent, and a
 print format genuinely can't be edited per-document the way a field could
@@ -605,7 +605,22 @@ as the template. The print format covers everything below the letterhead
 (seller/buyer, item table, terms grid, bank details, the three clause
 blocks, shipping marks, signature line); the logo/company-header band at
 the very top of `indent_template.pdf` is left to the site's own **Letter
-Head**, not duplicated here.
+Head**, not duplicated here. Set as Indent's `default_print_format`
+(`indent.json`), so it's what Print/PDF opens with automatically — no
+picking it from a list.
+
+**Design.** Restyled as a proper corporate document rather than a literal
+scan of the source template: one type scale (a 21px letter-spaced title
+down to 9px uppercase labels), one border/colour system throughout (soft
+slate-grey grid lines, a single deep-teal accent used consistently for
+section bars and the totals rule — echoing Smart Chemicals' own branding
+without competing with whatever Letter Head sits above it), and sentence
+case on the clause paragraphs instead of a wall of capitals — while keeping
+the handful of terms the source template itself calls out in bold ("30
+days", "85% shelf-life", "OUR") bold here too. Currency values are
+comma-formatted (`"{:,.2f}".format(...)`, not raw `%.2f`). Bold is reserved
+for what actually needs emphasis — party names, the indent number, totals,
+clause category labels, signature captions — not every label.
 
 **Status — entirely automatic, no manual button.** `indent_status` is
 hidden on the form until the Indent is submitted (`depends_on:

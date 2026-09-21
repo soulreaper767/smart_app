@@ -2,6 +2,7 @@
  "actions": [],
  "autoname": "naming_series:",
  "creation": "2026-09-21 00:00:00",
+ "default_print_format": "Indent Standard",
  "doctype": "DocType",
  "engine": "InnoDB",
  "is_submittable": 1,
