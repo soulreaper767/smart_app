@@ -360,57 +360,6 @@ def make_quotation(source_name, target_doc=None):
 	return doclist
 
 
-@frappe.whitelist()
-def make_sales_order(source_name, target_doc=None):
-	"""The parallel direct-sale pipeline (Inquiry -> Sales Order -> Sales
-	Invoice -> Indent), alongside -- not replacing -- the Quotation -> RFQ ->
-	Supplier Quotation buying pipeline above. Same mapper shape as
-	make_quotation: called from the "Get Items From" > "Inquiry" button
-	added to the core Sales Order form (see setup_sales_pipeline_integration
-	in install.py) and from the "Create > Sales Order" button on Inquiry
-	itself (inquiry.js), via frappe.model.open_mapped_doc. Only Inquiries
-	assigned to the current Commercial Officer (and submitted) are offered
-	as a source, via that button's get_query_filters."""
-
-	def set_missing_values(source, target):
-		sales_order = frappe.get_doc(target)
-		sales_order.order_type = "Sales"
-		sales_order.customer = source.inquiry_source
-		if not sales_order.delivery_date:
-			sales_order.delivery_date = frappe.utils.add_days(frappe.utils.today(), 7)
-		sales_order.run_method("set_missing_values")
-		sales_order.run_method("calculate_taxes_and_totals")
-
-	def update_item(source_row, target_row, source_parent):
-		target_row.item_code = source_row.item
-		target_row.qty = source_row.qty
-		target_row.delivery_date = frappe.utils.add_days(frappe.utils.today(), 7)
-
-	doclist = get_mapped_doc(
-		"Inquiry",
-		source_name,
-		{
-			"Inquiry": {
-				"doctype": "Sales Order",
-				"field_map": {
-					"company": "company",
-					"name": "inquiry",
-				},
-			},
-			"Inquiry Item": {
-				"doctype": "Sales Order Item",
-				"field_map": {"item": "item_code", "qty": "qty"},
-				"postprocess": update_item,
-				"add_if_empty": True,
-			},
-		},
-		target_doc,
-		set_missing_values,
-	)
-
-	return doclist
-
-
 def _append_rfq_item(rfq, source_row):
 	"""Shared by both create_request_for_quotation and
 	get_request_for_quotation_data below: append one Quotation Item's data

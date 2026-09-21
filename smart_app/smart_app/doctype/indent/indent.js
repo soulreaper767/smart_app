@@ -23,11 +23,15 @@ frappe.ui.form.on("Indent", {
 	refresh: function (frm) {
 		frm.trigger("set_status_indicator");
 		frm.trigger("show_get_items_from_sales_invoice_button");
-		frm.trigger("show_status_buttons");
 	},
 
 	set_status_indicator: function (frm) {
-		const colors = { Draft: "red", Submitted: "blue", "In Process": "orange", Closed: "green" };
+		// Purely informational -- indent_status is entirely automatic (see
+		// Indent.on_submit / close_indents_on_full_payment in utils.py),
+		// there's nothing to click here. Blank pre-submission (the field
+		// itself is hidden until then, see indent.json) falls through to
+		// Frappe's own default Draft/Submitted/Cancelled indicator.
+		const colors = { "In Process": "orange", Closed: "green" };
 		if (frm.doc.indent_status) {
 			frm.page.set_indicator(frm.doc.indent_status, colors[frm.doc.indent_status] || "gray");
 		}
@@ -98,40 +102,5 @@ frappe.ui.form.on("Indent", {
 			__("Get Items From"),
 			"btn-default"
 		);
-	},
-
-	show_status_buttons: function (frm) {
-		if (frm.doc.docstatus !== 1) return;
-		const can_manage =
-			frappe.user_roles.includes("Commercial Manager") ||
-			frappe.user_roles.includes("Commercial Officer") ||
-			frappe.user_roles.includes("System Manager");
-		if (!can_manage) return;
-
-		if (frm.doc.indent_status === "Submitted") {
-			frm.add_custom_button(__("Mark In Process"), function () {
-				frappe.call({
-					method: "smart_app.smart_app.doctype.indent.indent.mark_indent_in_process",
-					args: { indent_name: frm.doc.name },
-					freeze: true,
-					callback: function () {
-						frm.reload_doc();
-					},
-				});
-			}).addClass("btn-primary");
-		} else if (frm.doc.indent_status === "In Process") {
-			frm.add_custom_button(__("Mark Payment Received"), function () {
-				frappe.confirm(__("Mark this Indent as Closed?"), function () {
-					frappe.call({
-						method: "smart_app.smart_app.doctype.indent.indent.mark_indent_closed",
-						args: { indent_name: frm.doc.name },
-						freeze: true,
-						callback: function () {
-							frm.reload_doc();
-						},
-					});
-				});
-			}).addClass("btn-primary");
-		}
 	},
 });

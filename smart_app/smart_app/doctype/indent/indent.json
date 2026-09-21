@@ -65,7 +65,7 @@
    "fieldtype": "Select",
    "label": "Series",
    "no_copy": 1,
-   "options": ".####.-SC-.YYYY.",
+   "options": "IND-.YYYY.-.MM.-.####.",
    "print_hide": 1,
    "reqd": 1
   },
@@ -80,13 +80,13 @@
   },
   {
    "allow_on_submit": 1,
-   "default": "Draft",
+   "depends_on": "eval:doc.docstatus === 1",
    "fieldname": "indent_status",
    "fieldtype": "Select",
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Status",
-   "options": "Draft\nSubmitted\nIn Process\nClosed",
+   "options": "\nIn Process\nClosed",
    "read_only": 1
   },
   {

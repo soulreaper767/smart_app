@@ -1252,49 +1252,22 @@ def setup_quotation_integration():
 
 
 # ---------------------------------------------------------------------------
-# The parallel direct-sale pipeline: Inquiry -> Sales Order -> Sales Invoice
-# -> Indent, run by the same Commercial team alongside the Quotation -> RFQ
-# -> Supplier Quotation buying pipeline above. Sales Order's own "Get Items
-# From" > Inquiry mirrors Quotation's; Sales Invoice needs nothing customised
-# at all to be created from a Sales Order (100% native "Create > Sales
-# Invoice") -- only a "Create > Indent" button once it's submitted. Both are
-# core ERPNext doctypes, so -- same as above -- this is Custom Fields and
-# Client Scripts only, never editing ERPNext's own files.
+# The parallel direct-sale pipeline: Inquiry -> Quotation -> Sales Order ->
+# Sales Invoice -> Indent, run by the same Commercial team alongside the
+# Quotation -> RFQ -> Supplier Quotation buying pipeline above (both start
+# from the same Quotation -- this isn't a fork of the Inquiry, it's a fork
+# of what happens *after* a Quotation exists).
+#
+# Sales Order is deliberately built from Quotation, not Inquiry directly --
+# core ERPNext already provides this completely natively, both directions
+# (Quotation's own "Create > Sales Order" button, and the reverse "Get Items
+# From > Quotation" on a blank Sales Order, both calling erpnext.selling.
+# doctype.quotation.quotation.make_sales_order) -- so there's nothing to
+# customise here at all, only the permission grant (grant_commercial_access)
+# for a Commercial Officer/Manager to use either one. Sales Order -> Sales
+# Invoice is equally native. Only the "Create > Indent" button once a Sales
+# Invoice is submitted is this app's own.
 # ---------------------------------------------------------------------------
-
-SALES_ORDER_CLIENT_SCRIPT_JS = """
-frappe.ui.form.on("Sales Order", {
-	refresh: function (frm) {
-		if (frm.doc.docstatus === 0 && frappe.model.can_read("Inquiry")) {
-			frm.add_custom_button(
-				__("Inquiry"),
-				function () {
-					erpnext.utils.map_current_doc({
-						method: "smart_app.smart_app.doctype.inquiry.inquiry.make_sales_order",
-						source_doctype: "Inquiry",
-						target: frm,
-						setters: [
-							{
-								label: "Customer",
-								fieldname: "inquiry_source",
-								fieldtype: "Link",
-								options: "Customer",
-								default: frm.doc.customer || undefined,
-							},
-						],
-						get_query_filters: {
-							commercial_officer: frappe.session.user,
-							docstatus: 1,
-						},
-					});
-				},
-				__("Get Items From"),
-				"btn-default"
-			);
-		}
-	},
-});
-""".strip()
 
 # create_indent_from_sales_invoice (indent.py) builds a draft Indent with
 # every item carried over -- a Commercial Officer still has to pick which
@@ -1331,16 +1304,30 @@ frappe.ui.form.on("Sales Invoice", {
 
 def setup_sales_pipeline_integration():
 	if frappe.db.exists("DocType", "Sales Order"):
+		# Hidden -- internal chain-tracing (Sales Order -> Quotation ->
+		# Inquiry), same treatment as Request for Quotation's own `inquiry`
+		# field. Best-effort filled in by
+		# smart_app.smart_app.utils.set_inquiry_from_quotation (Sales Order
+		# validate) from whichever Quotation this Sales Order was created
+		# from (core ERPNext's native mapper, either direction -- see the
+		# module docstring above), since that mapper has no idea about a
+		# Custom Field we added after the fact.
 		_add_custom_field("Sales Order", "inquiry", "Inquiry", "Inquiry", insert_after="customer")
-		_upsert_client_script(
-			"Inquiry - Commercial Pipeline (Sales Order)", "Sales Order", SALES_ORDER_CLIENT_SCRIPT_JS
-		)
+		_set_property_setter("Sales Order", "inquiry", "hidden", "1", "Check")
+		# Self-healing cleanup: an earlier version of this app built Sales
+		# Order directly from Inquiry (its own Client Script + a
+		# make_sales_order mapper) instead of via Quotation. Remove that
+		# script from any site that already migrated with it, so a stale
+		# "Get Items From > Inquiry" button doesn't linger on Sales Order.
+		if frappe.db.exists("Client Script", "Inquiry - Commercial Pipeline (Sales Order)"):
+			frappe.delete_doc(
+				"Client Script", "Inquiry - Commercial Pipeline (Sales Order)", ignore_permissions=True
+			)
 
 	if frappe.db.exists("DocType", "Sales Invoice"):
 		# Hidden -- internal chain-tracing (Sales Invoice -> Sales Order ->
-		# Inquiry), same treatment as Request for Quotation's own `inquiry`
-		# field above. Best-effort filled in by
-		# smart_app.smart_app.utils.set_inquiry_from_sales_order (Sales
+		# Quotation -> Inquiry), same treatment as above. Best-effort filled
+		# in by smart_app.smart_app.utils.set_inquiry_from_sales_order (Sales
 		# Invoice validate), since core ERPNext's own Sales Order -> Sales
 		# Invoice mapper has a fixed field_map that won't carry a Custom
 		# Field over on its own.

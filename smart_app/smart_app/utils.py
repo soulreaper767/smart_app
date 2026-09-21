@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import frappe
+from frappe.utils import flt
 
 APPLICABLE_FOR = "Inquiry"
 INQUIRY_ROLES = {"Inquiry Officer", "Marketer", "Inquiry Manager"}
@@ -475,6 +476,29 @@ def ensure_supplier_bank_details(doc, method=None):
 			doc.set(fieldname, value)
 
 
+def set_inquiry_from_quotation(doc, method=None):
+	"""Sales Order.validate: best-effort carry-over of the `inquiry` Custom
+	Field (see setup_sales_pipeline_integration in install.py) from
+	whichever Quotation this Sales Order was created from. Sales Order is
+	deliberately built from Quotation, not Inquiry directly -- core
+	ERPNext already provides that completely natively, both directions
+	(Quotation's own "Create > Sales Order" button, and the reverse "Get
+	Items From > Quotation" on a blank Sales Order) -- but neither knows
+	about a Custom Field added after the fact, so `inquiry` never carries
+	over on its own. The native mapper does set `prevdoc_docname` on each
+	Sales Order Item to the source Quotation's name regardless (see
+	erpnext.selling.doctype.quotation.quotation._make_sales_order's
+	field_map), which is enough to look `inquiry` up from there."""
+	if doc.get("inquiry"):
+		return
+
+	quotation = next(
+		(d.prevdoc_docname for d in doc.get("items") or [] if d.get("prevdoc_docname")), None
+	)
+	if quotation:
+		doc.inquiry = frappe.db.get_value("Quotation", quotation, "inquiry")
+
+
 def set_inquiry_from_sales_order(doc, method=None):
 	"""Sales Invoice.validate: best-effort carry-over of the `inquiry`
 	Custom Field (see setup_sales_pipeline_integration in install.py) from
@@ -492,3 +516,23 @@ def set_inquiry_from_sales_order(doc, method=None):
 	sales_order = next((d.sales_order for d in doc.get("items") or [] if d.get("sales_order")), None)
 	if sales_order:
 		doc.inquiry = frappe.db.get_value("Sales Order", sales_order, "inquiry")
+
+
+def close_indents_on_full_payment(doc, method=None):
+	"""Sales Invoice.on_update: an Indent's `indent_status` is entirely
+	automatic (see Indent.on_submit in indent.py) -- Submitted always means
+	"In Process", and the only thing that ever moves it on to "Closed" is
+	the linked Sales Invoice actually being paid in full, checked here
+	every time the invoice is saved (a Payment Entry reconciling against it
+	updates and re-saves it, which is what actually re-fires this). No
+	manual "mark as" button by design -- keeps the whole lifecycle tied to
+	real payment status instead of someone remembering to click something."""
+	if doc.docstatus != 1 or flt(doc.outstanding_amount) != 0:
+		return
+
+	for indent_name in frappe.get_all(
+		"Indent",
+		filters={"sales_invoice": doc.name, "docstatus": 1, "indent_status": ["!=", "Closed"]},
+		pluck="name",
+	):
+		frappe.db.set_value("Indent", indent_name, "indent_status", "Closed")

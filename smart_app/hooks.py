@@ -89,7 +89,11 @@ doc_events = {
 		"after_insert": "smart_app.smart_app.utils.create_default_price_list_for_supplier",
 		"validate": "smart_app.smart_app.utils.ensure_supplier_bank_details",
 	},
+	"Sales Order": {
+		"validate": "smart_app.smart_app.utils.set_inquiry_from_quotation",
+	},
 	"Sales Invoice": {
 		"validate": "smart_app.smart_app.utils.set_inquiry_from_sales_order",
+		"on_update": "smart_app.smart_app.utils.close_indents_on_full_payment",
 	},
 }

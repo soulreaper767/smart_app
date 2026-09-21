@@ -46,7 +46,6 @@ frappe.ui.form.on("Inquiry", {
 		frm.trigger("show_assign_button");
 		frm.trigger("show_submit_button");
 		frm.trigger("show_create_quotation_button");
-		frm.trigger("show_create_sales_order_button");
 	},
 
 	show_assign_button: function (frm) {
@@ -113,25 +112,6 @@ frappe.ui.form.on("Inquiry", {
 				function () {
 					frappe.model.open_mapped_doc({
 						method: "smart_app.smart_app.doctype.inquiry.inquiry.make_quotation",
-						frm: frm,
-					});
-				},
-				__("Create")
-			);
-		}
-	},
-
-	show_create_sales_order_button: function (frm) {
-		// The parallel direct-sale pipeline (Inquiry -> Sales Order -> Sales
-		// Invoice -> Indent), alongside -- not instead of -- the Quotation ->
-		// RFQ -> Supplier Quotation buying pipeline above. Same
-		// open_mapped_doc pattern as show_create_quotation_button.
-		if (frm.doc.docstatus === 1 && frappe.model.can_create("Sales Order")) {
-			frm.add_custom_button(
-				__("Sales Order"),
-				function () {
-					frappe.model.open_mapped_doc({
-						method: "smart_app.smart_app.doctype.inquiry.inquiry.make_sales_order",
 						frm: frm,
 					});
 				},

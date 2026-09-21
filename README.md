@@ -497,39 +497,43 @@ a human scanning the Item form, not a filter on who gets contacted.
 
 ## The direct-sale pipeline and Indent
 
-A second, parallel pipeline for when the Commercial team sells directly to
-the customer rather than importing on request: **Inquiry → Sales Order →
-Sales Invoice → Indent**, run alongside — not instead of — the Quotation →
-RFQ → Supplier Quotation buying pipeline above. Both start from the same
-submitted, assigned Inquiry.
+A second pipeline for when the Commercial team sells directly to the
+customer, forking off the same Quotation the buying pipeline (Quotation →
+RFQ → Supplier Quotation) already uses: **Quotation → Sales Order → Sales
+Invoice → Indent**.
 
-- **Inquiry → Sales Order**: a **"Create → Sales Order"** button on Inquiry
-  (`inquiry.js`), and the reverse **"Get Items From → Inquiry"** button on a
-  blank Sales Order (`SALES_ORDER_CLIENT_SCRIPT_JS` in `install.py`) —
-  exactly the same two-directions-of-one-mapper pattern as Quotation, both
-  calling the new `make_sales_order` (`inquiry.py`, mirrors `make_quotation`
-  line for line). Only Inquiries assigned to the current Commercial Officer
-  (and submitted) are offered as a source. A custom Field `inquiry`
-  (Link → Inquiry) is added to Sales Order for traceability.
-- **Sales Order → Sales Invoice**: 100% native ERPNext — core's own
-  "Create → Sales Invoice" button needs no customisation at all here, just
-  the permission grant below.
+- **Quotation → Sales Order**: entirely native ERPNext, both directions —
+  Quotation's own **"Create → Sales Order"** button, and the reverse
+  **"Get Items From → Quotation"** on a blank Sales Order (both call
+  `erpnext.selling.doctype.quotation.quotation.make_sales_order`). Nothing
+  to build here at all beyond the permission grant below. (An earlier
+  version of this pipeline built Sales Order directly from Inquiry with its
+  own mapper/button; removed in favour of this, since it's what ERPNext
+  already provides — `setup_sales_pipeline_integration` deletes that old
+  Client Script from any site that already migrated with it.)
+- **Sales Order → Sales Invoice**: equally native — core's own
+  "Create → Sales Invoice" button, no customisation needed here either.
 - **Sales Invoice → Indent**: once a Sales Invoice is **submitted**, a
-  **"Create → Indent"** button (`SALES_INVOICE_CLIENT_SCRIPT_JS`) builds a
-  draft Indent from it; the reverse **"Get Items From → Sales Invoice"**
-  button on a blank Indent (`indent.js`) does the same in place, for anyone
-  who starts from a blank Indent instead. Same shared-builder /
-  two-whitelisted-functions split as RFQ's own Quotation-picker
-  (`_build_indent_from_sales_invoice`, `create_indent_from_sales_invoice`,
-  `get_indent_data_from_sales_invoice` — all in `indent.py`), for the same
-  reason: `erpnext.utils.map_current_doc` clones *rows* into an existing
-  table, not one whole source document onto a blank one.
-- **Sales Invoice `inquiry` traceability**: core ERPNext's own
-  Sales Order → Sales Invoice mapper has a fixed `field_map` we can't edit
-  and doesn't know about a Custom Field added after the fact, so it never
-  carries `inquiry` over on its own. `set_inquiry_from_sales_order`
-  (`utils.py`, `Sales Invoice.validate`) fills it in from whichever Sales
-  Order the invoice's own item rows reference, whenever it's still blank.
+  **"Create → Indent"** button (`SALES_INVOICE_CLIENT_SCRIPT_JS` in
+  `install.py`) builds a draft Indent from it; the reverse
+  **"Get Items From → Sales Invoice"** button on a blank Indent
+  (`indent.js`) does the same in place, for anyone who starts from a blank
+  Indent instead. Shared-builder / two-whitelisted-functions split, same
+  shape as RFQ's own Quotation-picker (`_build_indent_from_sales_invoice`,
+  `create_indent_from_sales_invoice`, `get_indent_data_from_sales_invoice` —
+  all in `indent.py`), for the same reason: `erpnext.utils.map_current_doc`
+  clones *rows* into an existing table, not one whole source document onto
+  a blank one.
+- **`inquiry` traceability, two hops removed.** Custom Fields on both
+  **Sales Order** and **Sales Invoice** (both hidden — internal chain-
+  tracing only, like RFQ's own `inquiry` field). Neither of core ERPNext's
+  native mappers know about a Custom Field added after the fact, so neither
+  carries it over on its own: `set_inquiry_from_quotation` (`utils.py`,
+  `Sales Order.validate`) reads it from whichever Quotation the Sales Order
+  was created from (via `prevdoc_docname`, which the native mapper *does*
+  set on every Sales Order Item regardless); `set_inquiry_from_sales_order`
+  (`Sales Invoice.validate`) does the same one hop further, from the Sales
+  Order the invoice's own item rows reference.
 - **Permissions**: `grant_commercial_access` now also grants Commercial
   Officer/Manager full `select+read+write+create+submit+print+email+
   report+export` on **Sales Order** and **Sales Invoice**, the same shape
@@ -537,14 +541,15 @@ submitted, assigned Inquiry.
 
 ### Doctype: Indent
 
-Smart App's own doctype (naming series `.####.-SC-.YYYY.`, submittable,
-`track_changes`), laid out to match the firm's own import/export indent
-document (`indent_template.pdf`) field-for-field:
+Smart App's own doctype (naming series `IND-.YYYY.-.MM.-.####.`, e.g.
+`IND-2026-09-00001`, submittable, `track_changes`), laid out to match the
+firm's own import/export indent document (`indent_template.pdf`)
+field-for-field:
 
 | Field | Notes |
 |---|---|
 | `sales_invoice` | Set once via "Get Items From > Sales Invoice" (`read_only`) — the only supported way to populate an Indent |
-| `sales_order` / `inquiry` | Best-effort chain-tracing back through the Sales Invoice; `inquiry` is hidden (internal only, like RFQ's own) |
+| `sales_order` / `inquiry` | Best-effort chain-tracing back through the Sales Invoice -> Sales Order -> Quotation; `inquiry` is hidden (internal only, like RFQ's own) |
 | `customer` / `customer_name` / `customer_address_display` | The **BUYER** — fetched from the source Sales Invoice, `read_only` |
 | `supplier` / `supplier_name` / `seller_address_display` | The **SELLER** — the Commercial Officer picks which Supplier is actually fulfilling this shipment; not derivable from the Sales Invoice |
 | `bank_beneficiary_name` / `bank_name` / `bank_address` / `bank_account_no` / `swift_code` | **Fetched automatically from the selected Supplier** the moment it's picked (`fetch_from`) — see Supplier bank details below |
@@ -554,7 +559,7 @@ document (`indent_template.pdf`) field-for-field:
 | `lead_time` / `port_of_loading` / `destination` / `origin` / `packing` | All Link → the new **Indent Trade Term** master list (below), each scoped to its own `term_type` |
 | `trans_shipment` / `partial_shipment` / `gmp_availability` / `fta_availability` / `ws_availability` | Select, Allowed/Not Allowed or Available/Not Available |
 | `tc_name` / `terms` | The standard ERPNext Terms-and-Conditions mechanism (Link → template, Text Editor fetched from it) — **defaults from the source Sales Invoice's own `tc_name`/`terms`** when built via "Get Items From", freely editable afterwards |
-| `indent_status` | Draft → Submitted (automatic, `on_submit`) → In Process → Closed, via the two buttons below |
+| `indent_status` | Hidden until submitted (`depends_on`); then entirely automatic — see Status below |
 
 Every one of the 12 "Terms & Conditions" grid fields from the template is
 therefore a dropdown of one kind or another, per the brief — either an
@@ -602,18 +607,22 @@ blocks, shipping marks, signature line); the logo/company-header band at
 the very top of `indent_template.pdf` is left to the site's own **Letter
 Head**, not duplicated here.
 
-**Status.** `indent_status` moves **Draft → Submitted** automatically on
-submit (`Indent.on_submit`), then forward-only through **In Process** →
-**Closed** ("payment received") via two buttons (`indent.js`,
-Commercial Manager/Officer/System Manager only) calling
-`mark_indent_in_process` / `mark_indent_closed` (`indent.py`) — both a
-direct `frappe.db.set_value`, not `doc.save()`, deliberately: Frappe only
-calls a controller's `before_update_after_submit`/`on_update_after_submit`
-for a save on an already-submitted document, never `validate()` (see the
-`Inquiry.before_update_after_submit` docstring, which hit exactly this bug
-wiring up `assign_commercial_officer`) — a plain status flip has nothing
-else that needs `validate()` to run, so this sidesteps that whole class of
-bug rather than risking reproducing it.
+**Status — entirely automatic, no manual button.** `indent_status` is
+hidden on the form until the Indent is submitted (`depends_on:
+eval:doc.docstatus === 1` — "removed while preparing", since it means
+nothing before then). On submit it's set straight to **"In Process"**
+(`Indent.on_submit`) — there's no separate "Submitted" state to click
+through. From there, the *only* thing that ever moves it to **"Closed"** is
+its linked Sales Invoice actually being **paid in full**:
+`close_indents_on_full_payment` (`utils.py`, `Sales Invoice.on_update` —
+re-fires whenever a Payment Entry reconciles against the invoice and
+re-saves it) checks `outstanding_amount == 0` and closes every submitted,
+not-yet-closed Indent that names that Sales Invoice. Both this and
+`Indent.on_submit` write directly (`frappe.db.set_value` / a plain field
+assignment inside the controller, never a manual `doc.save()` called from
+outside it) — sidesteps the exact `before_update_after_submit`/`validate()`
+-doesn't-run-on-update-after-submit gap documented on
+`Inquiry.before_update_after_submit`, rather than risking reproducing it.
 
 **Report.** "Indent Register" (`_create_query_report`, `ref_doctype`
 `Indent`) — every non-cancelled Indent with its buyer, seller, currency,

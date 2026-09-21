@@ -7,9 +7,6 @@ from frappe.model.document import Document
 from frappe.utils import flt
 
 
-STATUS_ROLES = {"Commercial Manager", "Commercial Officer", "System Manager"}
-
-
 class Indent(Document):
 	def validate(self):
 		self.calculate_totals()
@@ -28,51 +25,15 @@ class Indent(Document):
 		self.total_amount = total_amount
 
 	def on_submit(self):
-		self.indent_status = "Submitted"
+		"""Status is entirely automatic from here on -- no manual "mark as"
+		button (see close_indents_on_full_payment in utils.py for the other
+		end of it): Submitted always means "In Process", and the only thing
+		that ever moves it to "Closed" is the linked Sales Invoice actually
+		being paid in full."""
+		self.indent_status = "In Process"
 
 	def on_cancel(self):
-		self.indent_status = "Draft"
-
-
-def _advance_status(indent_name, new_status, from_statuses):
-	"""Shared by mark_in_process / mark_closed below: an explicit role check
-	plus a direct frappe.db.set_value, not doc.save() -- an Indent is always
-	submitted (docstatus 1) by the time either of these runs, and Frappe
-	only calls a controller's before_update_after_submit/on_update_after_
-	submit hooks for a save on an already-submitted document, never
-	validate() (see the Inquiry.before_update_after_submit docstring, which
-	hit exactly this while wiring up assign_commercial_officer). A plain
-	status flip has nothing else that needs validate() to run, so a direct
-	DB write sidesteps that whole class of bug rather than reproducing it."""
-	if not (STATUS_ROLES & set(frappe.get_roles(frappe.session.user))):
-		frappe.throw(_("You are not allowed to change this Indent's status."), frappe.PermissionError)
-
-	indent = frappe.get_doc("Indent", indent_name)
-	indent.check_permission("write")
-
-	if indent.docstatus != 1:
-		frappe.throw(_("Only a submitted Indent can have its status updated."))
-	if indent.indent_status not in from_statuses:
-		frappe.throw(
-			_("Cannot mark this Indent {0} from its current status ({1}).").format(
-				new_status, indent.indent_status
-			)
-		)
-
-	frappe.db.set_value("Indent", indent_name, "indent_status", new_status)
-	return new_status
-
-
-@frappe.whitelist()
-def mark_indent_in_process(indent_name):
-	return _advance_status(indent_name, "In Process", from_statuses=["Submitted"])
-
-
-@frappe.whitelist()
-def mark_indent_closed(indent_name):
-	""""Payment received" in the UI (indent.js) -- named for the underlying
-	status so it reads sensibly from the report/list view too."""
-	return _advance_status(indent_name, "Closed", from_statuses=["Submitted", "In Process"])
+		self.indent_status = ""
 
 
 @frappe.whitelist()
