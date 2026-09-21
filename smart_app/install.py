@@ -1637,8 +1637,16 @@ def setup_print_format():
 		pf.standard = "No"
 		pf.disabled = 0
 
-	changed = pf.is_new() or pf.html != html
+	# custom_format=1 is what actually tells Frappe to render `html` as a
+	# Jinja template at all -- without it, print_format_type="Jinja" alone
+	# is ignored and Frappe falls back to auto-generating the print layout
+	# from format_data (which this print format never sets), silently
+	# discarding everything written into `html` below. Included in the
+	# `changed` check so a site that already migrated before this was
+	# caught gets self-healed on the next one.
+	changed = pf.is_new() or pf.html != html or not pf.custom_format
 	pf.html = html
+	pf.custom_format = 1
 
 	if pf.is_new():
 		pf.insert(ignore_permissions=True)
@@ -1943,8 +1951,14 @@ def setup_indent_print_format():
 		pf.standard = "No"
 		pf.disabled = 0
 
-	changed = pf.is_new() or pf.html != html
+	# custom_format=1 is what actually tells Frappe to render `html` as a
+	# Jinja template -- see the matching comment in setup_print_format.
+	# Without it, Frappe silently ignores the HTML below and auto-builds
+	# the layout instead, which is why the very first version of this print
+	# format didn't look like a custom design at all.
+	changed = pf.is_new() or pf.html != html or not pf.custom_format
 	pf.html = html
+	pf.custom_format = 1
 
 	if pf.is_new():
 		pf.insert(ignore_permissions=True)

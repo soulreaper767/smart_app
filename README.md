@@ -609,6 +609,17 @@ Head**, not duplicated here. Set as Indent's `default_print_format`
 (`indent.json`), so it's what Print/PDF opens with automatically — no
 picking it from a list.
 
+**`custom_format = 1` — required, not optional.** Print Format's own
+`print_format_type` field is `depends_on: custom_format` in Frappe's core
+schema: without `custom_format` checked, Frappe ignores `print_format_type`/
+`html` entirely and renders from `format_data` (the drag-and-drop Print
+Format Builder's own JSON) instead, which this print format never sets — so
+the carefully-built HTML below would have silently never actually rendered.
+Both `setup_print_format` (Inquiry) and `setup_indent_print_format` set it
+explicitly now, and it's part of the reconcile-on-every-run `changed` check
+in each, so a site that already migrated before this was caught self-heals
+on the next one.
+
 **Design.** Restyled as a proper corporate document rather than a literal
 scan of the source template: one type scale (a 21px letter-spaced title
 down to 9px uppercase labels), one border/colour system throughout (soft
