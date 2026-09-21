@@ -87,5 +87,9 @@ doc_events = {
 	},
 	"Supplier": {
 		"after_insert": "smart_app.smart_app.utils.create_default_price_list_for_supplier",
+		"validate": "smart_app.smart_app.utils.ensure_supplier_bank_details",
+	},
+	"Sales Invoice": {
+		"validate": "smart_app.smart_app.utils.set_inquiry_from_sales_order",
 	},
 }

@@ -1,0 +1,456 @@
+{
+ "actions": [],
+ "autoname": "naming_series:",
+ "creation": "2026-09-21 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "is_submittable": 1,
+ "field_order": [
+  "naming_series",
+  "indent_date",
+  "indent_status",
+  "column_break_header",
+  "company",
+  "currency",
+  "amended_from",
+  "section_break_source",
+  "sales_invoice",
+  "sales_order",
+  "inquiry",
+  "section_break_parties",
+  "customer",
+  "customer_name",
+  "customer_address_display",
+  "column_break_parties",
+  "supplier",
+  "supplier_name",
+  "seller_address_display",
+  "section_break_bank",
+  "bank_beneficiary_name",
+  "bank_name",
+  "column_break_bank",
+  "bank_account_no",
+  "swift_code",
+  "bank_address",
+  "section_break_items",
+  "items",
+  "section_break_totals",
+  "total_qty",
+  "column_break_totals",
+  "total_amount",
+  "section_break_terms_grid",
+  "payment_terms",
+  "port_of_loading",
+  "destination",
+  "origin",
+  "column_break_terms_1",
+  "incoterm",
+  "trans_shipment",
+  "partial_shipment",
+  "packing",
+  "column_break_terms_2",
+  "lead_time",
+  "gmp_availability",
+  "fta_availability",
+  "ws_availability",
+  "section_break_tc",
+  "tc_name",
+  "terms",
+  "section_break_notes",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "no_copy": 1,
+   "options": ".####.-SC-.YYYY.",
+   "print_hide": 1,
+   "reqd": 1
+  },
+  {
+   "default": "Today",
+   "fieldname": "indent_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Date",
+   "reqd": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "default": "Draft",
+   "fieldname": "indent_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Draft\nSubmitted\nIn Process\nClosed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_header",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "remember_last_selected_value": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency",
+   "reqd": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Indent",
+   "print_hide": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_source",
+   "fieldtype": "Section Break",
+   "label": "Source"
+  },
+  {
+   "description": "Set once, via \"Get Items From > Sales Invoice\" -- the only supported way to populate this Indent.",
+   "fieldname": "sales_invoice",
+   "fieldtype": "Link",
+   "label": "Sales Invoice",
+   "options": "Sales Invoice",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sales_order",
+   "fieldtype": "Link",
+   "label": "Sales Order",
+   "options": "Sales Order",
+   "read_only": 1
+  },
+  {
+   "fieldname": "inquiry",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Inquiry",
+   "options": "Inquiry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_parties",
+   "fieldtype": "Section Break",
+   "label": "Buyer & Seller"
+  },
+  {
+   "description": "BUYER -- fetched from the Sales Invoice this Indent was built from.",
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "label": "Buyer (Customer)",
+   "options": "Customer",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fetch_from": "customer.customer_name",
+   "fieldname": "customer_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Buyer Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "customer_address_display",
+   "fieldtype": "Small Text",
+   "label": "Buyer Address",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_parties",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "SELLER -- the Supplier actually fulfilling this shipment. Bank details below are fetched from this Supplier's own record.",
+   "fieldname": "supplier",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Seller (Supplier)",
+   "options": "Supplier",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "supplier.supplier_name",
+   "fieldname": "supplier_name",
+   "fieldtype": "Data",
+   "label": "Seller Name",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "supplier.seller_address_display",
+   "fieldname": "seller_address_display",
+   "fieldtype": "Small Text",
+   "label": "Seller Address",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_bank",
+   "fieldtype": "Section Break",
+   "label": "Bank Details"
+  },
+  {
+   "fetch_from": "supplier.bank_beneficiary_name",
+   "fieldname": "bank_beneficiary_name",
+   "fieldtype": "Data",
+   "label": "Beneficiary Name",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "supplier.bank_name",
+   "fieldname": "bank_name",
+   "fieldtype": "Data",
+   "label": "Bank Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_bank",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fetch_from": "supplier.bank_account_no",
+   "fieldname": "bank_account_no",
+   "fieldtype": "Data",
+   "label": "Account No",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "supplier.swift_code",
+   "fieldname": "swift_code",
+   "fieldtype": "Data",
+   "label": "SWIFT Code",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "supplier.bank_address",
+   "fieldname": "bank_address",
+   "fieldtype": "Small Text",
+   "label": "Bank Address",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_items",
+   "fieldtype": "Section Break",
+   "label": "Items"
+  },
+  {
+   "fieldname": "items",
+   "fieldtype": "Table",
+   "label": "Items",
+   "options": "Indent Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_totals",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "total_qty",
+   "fieldtype": "Float",
+   "label": "Total Quantity",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_totals",
+   "fieldtype": "Column Break"
+  },
+  {
+   "bold": 1,
+   "fieldname": "total_amount",
+   "fieldtype": "Currency",
+   "label": "Total Value (Net to Supplier)",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_terms_grid",
+   "fieldtype": "Section Break",
+   "label": "Terms & Conditions"
+  },
+  {
+   "fieldname": "payment_terms",
+   "fieldtype": "Link",
+   "label": "Payment Terms",
+   "options": "Inquiry Payment Mode"
+  },
+  {
+   "fieldname": "port_of_loading",
+   "fieldtype": "Link",
+   "label": "Port of Loading",
+   "options": "Indent Trade Term"
+  },
+  {
+   "fieldname": "destination",
+   "fieldtype": "Link",
+   "label": "Destination",
+   "options": "Indent Trade Term"
+  },
+  {
+   "fieldname": "origin",
+   "fieldtype": "Link",
+   "label": "Origin",
+   "options": "Indent Trade Term"
+  },
+  {
+   "fieldname": "column_break_terms_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "incoterm",
+   "fieldtype": "Link",
+   "label": "Incoterm",
+   "options": "Inquiry Incoterm"
+  },
+  {
+   "default": "Allowed",
+   "fieldname": "trans_shipment",
+   "fieldtype": "Select",
+   "label": "Trans-Shipment",
+   "options": "Allowed\nNot Allowed"
+  },
+  {
+   "default": "Not Allowed",
+   "fieldname": "partial_shipment",
+   "fieldtype": "Select",
+   "label": "Partial Shipment",
+   "options": "Allowed\nNot Allowed"
+  },
+  {
+   "fieldname": "packing",
+   "fieldtype": "Link",
+   "label": "Packing",
+   "options": "Indent Trade Term"
+  },
+  {
+   "fieldname": "column_break_terms_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "lead_time",
+   "fieldtype": "Link",
+   "label": "Lead Time",
+   "options": "Indent Trade Term"
+  },
+  {
+   "fieldname": "gmp_availability",
+   "fieldtype": "Select",
+   "label": "GMP",
+   "options": "Available\nNot Available"
+  },
+  {
+   "fieldname": "fta_availability",
+   "fieldtype": "Select",
+   "label": "FTA",
+   "options": "Available\nNot Available"
+  },
+  {
+   "fieldname": "ws_availability",
+   "fieldtype": "Select",
+   "label": "WS",
+   "options": "Available\nNot Available"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_tc",
+   "fieldtype": "Section Break",
+   "label": "General Terms and Conditions"
+  },
+  {
+   "description": "Defaults to whatever Terms and Conditions template the source Sales Invoice used -- change it here if this Indent needs different wording.",
+   "fieldname": "tc_name",
+   "fieldtype": "Link",
+   "label": "Terms Template",
+   "options": "Terms and Conditions"
+  },
+  {
+   "fieldname": "terms",
+   "fieldtype": "Text Editor",
+   "label": "Terms and Conditions"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_notes",
+   "fieldtype": "Section Break",
+   "label": "Additional Information"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Text",
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "module": "Smart App",
+ "name": "Indent",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Commercial Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "amend": 1,
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Commercial Officer",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "search_fields": "customer_name,supplier_name,indent_status",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "customer_name",
+ "track_changes": 1
+}

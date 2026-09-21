@@ -495,6 +495,137 @@ still blasts every supplier on every item regardless of type or preference,
 since "send RFQ to all of them" was the whole point; Preferred/Type are for
 a human scanning the Item form, not a filter on who gets contacted.
 
+## The direct-sale pipeline and Indent
+
+A second, parallel pipeline for when the Commercial team sells directly to
+the customer rather than importing on request: **Inquiry → Sales Order →
+Sales Invoice → Indent**, run alongside — not instead of — the Quotation →
+RFQ → Supplier Quotation buying pipeline above. Both start from the same
+submitted, assigned Inquiry.
+
+- **Inquiry → Sales Order**: a **"Create → Sales Order"** button on Inquiry
+  (`inquiry.js`), and the reverse **"Get Items From → Inquiry"** button on a
+  blank Sales Order (`SALES_ORDER_CLIENT_SCRIPT_JS` in `install.py`) —
+  exactly the same two-directions-of-one-mapper pattern as Quotation, both
+  calling the new `make_sales_order` (`inquiry.py`, mirrors `make_quotation`
+  line for line). Only Inquiries assigned to the current Commercial Officer
+  (and submitted) are offered as a source. A custom Field `inquiry`
+  (Link → Inquiry) is added to Sales Order for traceability.
+- **Sales Order → Sales Invoice**: 100% native ERPNext — core's own
+  "Create → Sales Invoice" button needs no customisation at all here, just
+  the permission grant below.
+- **Sales Invoice → Indent**: once a Sales Invoice is **submitted**, a
+  **"Create → Indent"** button (`SALES_INVOICE_CLIENT_SCRIPT_JS`) builds a
+  draft Indent from it; the reverse **"Get Items From → Sales Invoice"**
+  button on a blank Indent (`indent.js`) does the same in place, for anyone
+  who starts from a blank Indent instead. Same shared-builder /
+  two-whitelisted-functions split as RFQ's own Quotation-picker
+  (`_build_indent_from_sales_invoice`, `create_indent_from_sales_invoice`,
+  `get_indent_data_from_sales_invoice` — all in `indent.py`), for the same
+  reason: `erpnext.utils.map_current_doc` clones *rows* into an existing
+  table, not one whole source document onto a blank one.
+- **Sales Invoice `inquiry` traceability**: core ERPNext's own
+  Sales Order → Sales Invoice mapper has a fixed `field_map` we can't edit
+  and doesn't know about a Custom Field added after the fact, so it never
+  carries `inquiry` over on its own. `set_inquiry_from_sales_order`
+  (`utils.py`, `Sales Invoice.validate`) fills it in from whichever Sales
+  Order the invoice's own item rows reference, whenever it's still blank.
+- **Permissions**: `grant_commercial_access` now also grants Commercial
+  Officer/Manager full `select+read+write+create+submit+print+email+
+  report+export` on **Sales Order** and **Sales Invoice**, the same shape
+  already granted for Quotation/RFQ.
+
+### Doctype: Indent
+
+Smart App's own doctype (naming series `.####.-SC-.YYYY.`, submittable,
+`track_changes`), laid out to match the firm's own import/export indent
+document (`indent_template.pdf`) field-for-field:
+
+| Field | Notes |
+|---|---|
+| `sales_invoice` | Set once via "Get Items From > Sales Invoice" (`read_only`) — the only supported way to populate an Indent |
+| `sales_order` / `inquiry` | Best-effort chain-tracing back through the Sales Invoice; `inquiry` is hidden (internal only, like RFQ's own) |
+| `customer` / `customer_name` / `customer_address_display` | The **BUYER** — fetched from the source Sales Invoice, `read_only` |
+| `supplier` / `supplier_name` / `seller_address_display` | The **SELLER** — the Commercial Officer picks which Supplier is actually fulfilling this shipment; not derivable from the Sales Invoice |
+| `bank_beneficiary_name` / `bank_name` / `bank_address` / `bank_account_no` / `swift_code` | **Fetched automatically from the selected Supplier** the moment it's picked (`fetch_from`) — see Supplier bank details below |
+| `items` (→ Indent Item) | item, product description, **HS Code** (best-effort auto-filled from the Item master's own `customs_tariff_number` if set — see `_best_effort_hs_code` — always plain-editable regardless, since classification can vary by shipment), qty, UOM, unit price, total value |
+| `total_qty` / `total_amount` | Computed server-side (`Indent.calculate_totals`, `validate()`) — correct even for a row added via "Get Items From", not dependent on client JS |
+| `payment_terms` (→ Inquiry Payment Mode) / `incoterm` (→ Inquiry Incoterm) | Reuse Inquiry's own existing manager-editable master lists — `seed_master_data` adds "DP AT SIGHT"/"CPT" to them, the values the sample template itself uses |
+| `lead_time` / `port_of_loading` / `destination` / `origin` / `packing` | All Link → the new **Indent Trade Term** master list (below), each scoped to its own `term_type` |
+| `trans_shipment` / `partial_shipment` / `gmp_availability` / `fta_availability` / `ws_availability` | Select, Allowed/Not Allowed or Available/Not Available |
+| `tc_name` / `terms` | The standard ERPNext Terms-and-Conditions mechanism (Link → template, Text Editor fetched from it) — **defaults from the source Sales Invoice's own `tc_name`/`terms`** when built via "Get Items From", freely editable afterwards |
+| `indent_status` | Draft → Submitted (automatic, `on_submit`) → In Process → Closed, via the two buttons below |
+
+Every one of the 12 "Terms & Conditions" grid fields from the template is
+therefore a dropdown of one kind or another, per the brief — either an
+existing master list or the new one below, never free text.
+
+**Indent Trade Term** — one small manager-editable master list (like
+Inquiry's own Shipment Mode / Payment Mode / Incoterm / Category) backing
+the five Indent fields above that don't map onto an existing list: each
+row is a `(term_type, value)` pair, and each Indent field's Link query is
+scoped to its own `term_type` (`indent.js`) so the same list serves all
+five without needing five separate doctypes. Seeded on install with a
+handful of starting values (`INDENT_TRADE_TERM_SEED` in `install.py`);
+extend it any time from its own list view.
+
+**Supplier bank details, for the Indent "SELLER"/"BANK DETAILS" sections.**
+`setup_supplier_bank_fields` adds `bank_beneficiary_name` / `bank_name` /
+`bank_address` / `bank_account_no` / `swift_code` / `seller_address_display`
+as plain Custom Fields on **Supplier** (a "Bank Details (for Indent)"
+section after `supplier_details`) — Indent's own bank fields simply
+`fetch_from` these the moment a Supplier is selected, exactly as asked.
+`smart_app.supplier_import` already writes a pipe-delimited "Key: Value |
+Key: Value" summary into every imported Supplier's native
+`supplier_details` field (Beneficiary Name, Bank Name, Bank Address,
+Account No, SWIFT Code, Office/Factory Address); `parse_supplier_details_text`
+(`utils.py`) parses exactly that shape, `ensure_supplier_bank_details`
+(`Supplier.validate`) self-heals it into the new structured fields whenever
+one is still blank (never overwrites a value someone entered directly), and
+`backfill_supplier_bank_details` (`install.py`) applies the same parse once
+to every Supplier that already existed before these fields shipped — all
+345 imported ones included. Going forward, filling these fields in directly
+for a brand-new Supplier is the more robust path; the text-parsing is a
+one-time convenience, not something new data needs to keep matching.
+
+**Fixed clauses and shipping marks, exactly as asked.** The **FOR
+BANKER** / **FOR BUYER** / **FOR SHIPPER** clause blocks and the
+**SHIPPING MARKS** wording are hardcoded directly into the **Indent
+Standard** print format (`setup_indent_print_format`), not doctype fields —
+the whole point is that they read identically on *every* Indent, and a
+print format genuinely can't be edited per-document the way a field could
+be. The one part of Shipping Marks that does vary — the buyer's name — is
+the only piece pulled from the document (`{{ doc.customer_name }}`), same
+as the template. The print format covers everything below the letterhead
+(seller/buyer, item table, terms grid, bank details, the three clause
+blocks, shipping marks, signature line); the logo/company-header band at
+the very top of `indent_template.pdf` is left to the site's own **Letter
+Head**, not duplicated here.
+
+**Status.** `indent_status` moves **Draft → Submitted** automatically on
+submit (`Indent.on_submit`), then forward-only through **In Process** →
+**Closed** ("payment received") via two buttons (`indent.js`,
+Commercial Manager/Officer/System Manager only) calling
+`mark_indent_in_process` / `mark_indent_closed` (`indent.py`) — both a
+direct `frappe.db.set_value`, not `doc.save()`, deliberately: Frappe only
+calls a controller's `before_update_after_submit`/`on_update_after_submit`
+for a save on an already-submitted document, never `validate()` (see the
+`Inquiry.before_update_after_submit` docstring, which hit exactly this bug
+wiring up `assign_commercial_officer`) — a plain status flip has nothing
+else that needs `validate()` to run, so this sidesteps that whole class of
+bug rather than risking reproducing it.
+
+**Report.** "Indent Register" (`_create_query_report`, `ref_doctype`
+`Indent`) — every non-cancelled Indent with its buyer, seller, currency,
+total value and status, granted to Commercial Manager/Officer/System
+Manager.
+
+**Surfaced in the workspace**, per this app's own rule of always doing so
+for anything new: Commercial Team section shortcuts for Sales Orders,
+Sales Invoices, Indents, and the Indent Register report; a "Commercial"
+Links card entry; a new **Commercial Dashboard** chart ("Indents by
+Status") and Number Card ("Open Indents" — submitted, not yet Closed).
+
 ## Multi-price management: a dedicated Price List per Customer/Supplier
 
 "Multiple sales and purchase prices for the same item" is entirely native

@@ -32,12 +32,14 @@ COMMERCIAL_CARD_NAMES = [
 	"Unassigned Inquiries",
 	"Assigned Inquiries",
 	"Total Suppliers",
+	"Open Indents",
 ]
 
 # Commercial-side Dashboard Charts (not Inquiry-based, so built separately from
 # CHART_NAMES / setup_dashboard_charts).
 COMMERCIAL_CHART_NAMES = [
 	"Suppliers by Country",
+	"Indents by Status",
 ]
 
 COMMERCIAL_STATUSES = ["Unassigned", "Assigned", "Quotation Created", "RFQ Created", "RFQ Sent"]
@@ -174,6 +176,21 @@ COMMERCIAL_SHORTCUTS = [
 		"doc_view": "List",
 		"color": "#22C55E",
 	},
+	{"label": "Sales Orders", "type": "DocType", "link_to": "Sales Order", "doc_view": "List", "color": "#A855F7"},
+	{
+		"label": "Sales Invoices",
+		"type": "DocType",
+		"link_to": "Sales Invoice",
+		"doc_view": "List",
+		"color": "#A855F7",
+	},
+	{"label": "Indents", "type": "DocType", "link_to": "Indent", "doc_view": "List", "color": "#A855F7"},
+	{
+		"label": "Indent Register",
+		"type": "Report",
+		"link_to": "Indent Register",
+		"color": "#F97316",
+	},
 	{
 		"label": "Commercial Dashboard",
 		"type": "Dashboard",
@@ -209,21 +226,25 @@ def setup():
 	run_step(grant_master_data_access, "customer/item/employee access")
 	run_step(grant_commercial_access, "commercial team access")
 	run_step(seed_master_data, "master data")
+	run_step(setup_indent_masters, "indent trade term master data")
+	run_step(setup_supplier_bank_fields, "supplier bank detail fields (for Indent)")
 	run_step(setup_workflow, "workflow")
 	run_step(setup_kanban_board, "kanban board")
 	run_step(setup_dashboard_charts, "dashboard charts")
-	run_step(setup_commercial_charts, "commercial dashboard charts (suppliers)")
+	run_step(setup_commercial_charts, "commercial dashboard charts (suppliers, indents)")
 	run_step(setup_number_cards, "number cards")
 	run_step(setup_commercial_overview, "commercial overview (cards + kanban + report)")
 	run_step(setup_dashboard, "dashboard")
 	run_step(setup_commercial_dashboard, "commercial dashboard")
 	run_step(setup_reports, "reports")
 	run_step(setup_print_format, "print format")
+	run_step(setup_indent_print_format, "indent print format")
 	run_step(setup_workspace, "workspace")
 	run_step(add_home_workspace_shortcut, "home workspace shortcut")
 	run_step(grant_inquiry_manager_workflow_access, "inquiry manager workflow access")
 	run_step(setup_module_profile, "restricted module profile")
 	run_step(setup_quotation_integration, "quotation get-items-from + create-rfq integration")
+	run_step(setup_sales_pipeline_integration, "sales order/invoice get-items-from + create-indent integration")
 	run_step(setup_item_master_columns, "item master columns (UOM/pharmacopeia/grade)")
 	run_step(setup_item_supplier_customization, "multi-supplier management on Item (type/preferred)")
 	run_step(setup_test_users, "test users")
@@ -231,6 +252,7 @@ def setup():
 	run_step(backfill_commercial_status, "backfill blank/stuck commercial_status on existing Inquiries")
 	run_step(backfill_party_price_lists, "backfill default Price Lists for existing Customers/Suppliers")
 	run_step(backfill_item_default_warehouse, "backfill default warehouse on existing stock Items")
+	run_step(backfill_supplier_bank_details, "backfill supplier bank details (for Indent)")
 	run_step(backfill_rfq_quotation_links, "backfill quotation link on existing Requests for Quotation")
 	run_step(setup_email_branding, "email footer branding")
 	run_step(setup_email_templates, "RFQ email template")
@@ -342,10 +364,13 @@ def grant_master_data_access():
 # ---------------------------------------------------------------------------
 # Commercial team (Commercial Manager / Commercial Officer): they take a
 # submitted Inquiry, generate a Quotation from it, then a Request for
-# Quotation to the suppliers of its items. None of the core doctypes that
-# flow touches (Quotation, Request for Quotation, Supplier, Supplier
-# Quotation, plus Item/Company/Currency/Customer/Contact which Quotation and
-# RFQ themselves need) are granted to any role in this app by default.
+# Quotation to the suppliers of its items -- or, in parallel, a Sales Order
+# and Sales Invoice straight to the customer, followed by an Indent (see
+# setup_sales_pipeline_integration below). None of the core doctypes either
+# flow touches (Quotation, Request for Quotation, Sales Order, Sales
+# Invoice, Supplier, Supplier Quotation, plus Item/Company/Currency/
+# Customer/Contact which they all need) are granted to any role in this app
+# by default.
 # ---------------------------------------------------------------------------
 
 
@@ -382,7 +407,10 @@ def grant_commercial_access():
 
 		# Commercial Officer generates these; Commercial Manager gets the
 		# same access for oversight (reassigning, reviewing, following up).
-		for doctype in ("Quotation", "Request for Quotation"):
+		# Sales Order / Sales Invoice are the parallel direct-sale pipeline
+		# (Inquiry -> Sales Order -> Sales Invoice -> Indent) this same team
+		# runs alongside the buying side.
+		for doctype in ("Quotation", "Request for Quotation", "Sales Order", "Sales Invoice"):
 			_grant_custom_docperm(
 				doctype, role, select=1, read=1, write=1, create=1, submit=1, print=1, email=1,
 				report=1, export=1,
@@ -502,6 +530,11 @@ def seed_master_data():
 			"DA - 60 Days",
 			"DA - 90 Days",
 			"DA - Above 90 Days",
+			# Also used by Indent's own "Payment Terms" field (see
+			# setup_indent_masters) -- Indent's sample template quotes
+			# "DP AT SIGHT", which this list didn't otherwise carry.
+			"DP AT SIGHT",
+			"LC AT SIGHT",
 		],
 	)
 	_seed("Inquiry Category", "category_name", ["NPD - New Product Development", "Commercial"])
@@ -513,6 +546,9 @@ def seed_master_data():
 		"CFR": "Cost and Freight",
 		"CNF": "Cost and Freight (C&F)",
 		"DDP": "Delivered Duty Paid",
+		# Also used by Indent's own "Incoterm" field (see
+		# setup_indent_masters) -- Indent's sample template quotes "CPT".
+		"CPT": "Carriage Paid To",
 	}
 	for code, description in incoterms.items():
 		if not frappe.db.exists("Inquiry Incoterm", code):
@@ -525,6 +561,37 @@ def _seed(doctype, fieldname, values):
 	for value in values:
 		if not frappe.db.exists(doctype, value):
 			frappe.get_doc({"doctype": doctype, fieldname: value}).insert(ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
+# Indent Trade Term: one manager-editable master list backing five of
+# Indent's own "Terms & Conditions" grid fields (Port of Loading,
+# Destination, Origin, Packing, Lead Time -- each just scoped to its own
+# term_type via a Link query, see indent.js), the same way Inquiry Shipment
+# Mode / Payment Mode / Incoterm / Category already back Inquiry's own
+# dropdowns. Payment Terms and Incoterm reuse those existing master lists
+# directly instead (see the "DP AT SIGHT" / "CPT" additions in
+# seed_master_data) rather than duplicating them here.
+# ---------------------------------------------------------------------------
+
+INDENT_TRADE_TERM_SEED = {
+	"Port of Loading": ["Any Chinese Airport", "Any Chinese Seaport"],
+	"Destination": ["Lahore Airport, Pakistan", "Karachi Port, Pakistan"],
+	"Origin": ["China", "India", "Pakistan"],
+	"Packing": ["Export Standard"],
+	"Lead Time": ["1-2 Weeks", "3-4 Weeks", "5-6 Weeks", "7-8 Weeks"],
+}
+
+
+def setup_indent_masters():
+	if not frappe.db.exists("DocType", "Indent Trade Term"):
+		return
+	for term_type, values in INDENT_TRADE_TERM_SEED.items():
+		for value in values:
+			if not frappe.db.exists("Indent Trade Term", {"term_type": term_type, "value": value}):
+				frappe.get_doc(
+					{"doctype": "Indent Trade Term", "term_type": term_type, "value": value}
+				).insert(ignore_permissions=True)
 
 
 # ---------------------------------------------------------------------------
@@ -720,6 +787,19 @@ def setup_commercial_charts():
 	chart.module = MODULE
 	chart.insert(ignore_permissions=True)
 
+	if frappe.db.exists("DocType", "Indent") and not frappe.db.exists("Dashboard Chart", "Indents by Status"):
+		indent_chart = frappe.new_doc("Dashboard Chart")
+		indent_chart.chart_name = "Indents by Status"
+		indent_chart.chart_type = "Group By"
+		indent_chart.document_type = "Indent"
+		indent_chart.group_by_type = "Count"
+		indent_chart.group_by_based_on = "indent_status"
+		indent_chart.type = "Donut"
+		indent_chart.filters_json = json.dumps([["Indent", "docstatus", "!=", 2]])
+		indent_chart.is_public = 1
+		indent_chart.module = MODULE
+		indent_chart.insert(ignore_permissions=True)
+
 
 # ---------------------------------------------------------------------------
 # Number Cards (KPIs)
@@ -792,6 +872,15 @@ def setup_commercial_overview():
 	if frappe.db.exists("DocType", "Supplier"):
 		_create_number_card(
 			"Total Suppliers", "Count", [["Supplier", "disabled", "=", 0]], document_type="Supplier"
+		)
+	# Submitted Indents not yet Closed -- the Commercial team's own
+	# "still waiting on payment" queue.
+	if frappe.db.exists("DocType", "Indent"):
+		_create_number_card(
+			"Open Indents",
+			"Count",
+			[["Indent", "docstatus", "=", 1], ["Indent", "indent_status", "!=", "Closed"]],
+			document_type="Indent",
 		)
 
 	# Only submitted Inquiries belong on this board -- otherwise every draft
@@ -908,8 +997,32 @@ def setup_reports():
 		""".strip(),
 	)
 
+	_create_query_report(
+		"Indent Register",
+		"""
+		select
+			ind.name as "Indent No:Link/Indent:130",
+			ind.indent_date as "Date:Date:100",
+			ind.customer_name as "Buyer:Data:200",
+			ind.supplier_name as "Seller:Data:200",
+			ind.currency as "Currency:Link/Currency:90",
+			ind.total_amount as "Total Value:Currency/currency:130",
+			ind.indent_status as "Status:Data:110"
+		from `tabIndent` ind
+		where ind.docstatus != 2
+		order by ind.indent_date desc
+		""".strip(),
+		roles=("Commercial Manager", "Commercial Officer", "System Manager"),
+		ref_doctype="Indent",
+	)
 
-def _create_query_report(name, query, roles=("Inquiry Manager", "Inquiry Officer", "Marketer", "System Manager")):
+
+def _create_query_report(
+	name,
+	query,
+	roles=("Inquiry Manager", "Inquiry Officer", "Marketer", "System Manager"),
+	ref_doctype="Inquiry",
+):
 	"""Reconciles the query/roles on every run, not just on first create, so
 	an updated SQL definition (e.g. dropping a removed field) self-heals on
 	the next migrate instead of leaving the stale version in place."""
@@ -918,7 +1031,7 @@ def _create_query_report(name, query, roles=("Inquiry Manager", "Inquiry Officer
 	else:
 		report = frappe.new_doc("Report")
 		report.report_name = name
-		report.ref_doctype = "Inquiry"
+		report.ref_doctype = ref_doctype
 		report.report_type = "Query Report"
 		report.is_standard = "No"
 		report.module = MODULE
@@ -1138,6 +1251,106 @@ def setup_quotation_integration():
 		)
 
 
+# ---------------------------------------------------------------------------
+# The parallel direct-sale pipeline: Inquiry -> Sales Order -> Sales Invoice
+# -> Indent, run by the same Commercial team alongside the Quotation -> RFQ
+# -> Supplier Quotation buying pipeline above. Sales Order's own "Get Items
+# From" > Inquiry mirrors Quotation's; Sales Invoice needs nothing customised
+# at all to be created from a Sales Order (100% native "Create > Sales
+# Invoice") -- only a "Create > Indent" button once it's submitted. Both are
+# core ERPNext doctypes, so -- same as above -- this is Custom Fields and
+# Client Scripts only, never editing ERPNext's own files.
+# ---------------------------------------------------------------------------
+
+SALES_ORDER_CLIENT_SCRIPT_JS = """
+frappe.ui.form.on("Sales Order", {
+	refresh: function (frm) {
+		if (frm.doc.docstatus === 0 && frappe.model.can_read("Inquiry")) {
+			frm.add_custom_button(
+				__("Inquiry"),
+				function () {
+					erpnext.utils.map_current_doc({
+						method: "smart_app.smart_app.doctype.inquiry.inquiry.make_sales_order",
+						source_doctype: "Inquiry",
+						target: frm,
+						setters: [
+							{
+								label: "Customer",
+								fieldname: "inquiry_source",
+								fieldtype: "Link",
+								options: "Customer",
+								default: frm.doc.customer || undefined,
+							},
+						],
+						get_query_filters: {
+							commercial_officer: frappe.session.user,
+							docstatus: 1,
+						},
+					});
+				},
+				__("Get Items From"),
+				"btn-default"
+			);
+		}
+	},
+});
+""".strip()
+
+# create_indent_from_sales_invoice (indent.py) builds a draft Indent with
+# every item carried over -- a Commercial Officer still has to pick which
+# Supplier is actually fulfilling the shipment (which fetches its bank
+# details, see setup_supplier_bank_fields) and fill in the trade-terms grid,
+# so this deliberately doesn't try to do more than hand off the item list.
+SALES_INVOICE_CLIENT_SCRIPT_JS = """
+frappe.ui.form.on("Sales Invoice", {
+	refresh: function (frm) {
+		if (
+			frm.doc.docstatus === 1 &&
+			frm.doc.items &&
+			frm.doc.items.length &&
+			frappe.model.can_create("Indent")
+		) {
+			frm.add_custom_button(__("Indent"), function () {
+				frappe.call({
+					method: "smart_app.smart_app.doctype.indent.indent.create_indent_from_sales_invoice",
+					args: { sales_invoice_name: frm.doc.name },
+					freeze: true,
+					freeze_message: __("Preparing Indent..."),
+					callback: function (r) {
+						if (r.message) {
+							frappe.set_route("Form", "Indent", r.message);
+						}
+					},
+				});
+			}, __("Create"));
+		}
+	},
+});
+""".strip()
+
+
+def setup_sales_pipeline_integration():
+	if frappe.db.exists("DocType", "Sales Order"):
+		_add_custom_field("Sales Order", "inquiry", "Inquiry", "Inquiry", insert_after="customer")
+		_upsert_client_script(
+			"Inquiry - Commercial Pipeline (Sales Order)", "Sales Order", SALES_ORDER_CLIENT_SCRIPT_JS
+		)
+
+	if frappe.db.exists("DocType", "Sales Invoice"):
+		# Hidden -- internal chain-tracing (Sales Invoice -> Sales Order ->
+		# Inquiry), same treatment as Request for Quotation's own `inquiry`
+		# field above. Best-effort filled in by
+		# smart_app.smart_app.utils.set_inquiry_from_sales_order (Sales
+		# Invoice validate), since core ERPNext's own Sales Order -> Sales
+		# Invoice mapper has a fixed field_map that won't carry a Custom
+		# Field over on its own.
+		_add_custom_field("Sales Invoice", "inquiry", "Inquiry", "Inquiry", insert_after="customer")
+		_set_property_setter("Sales Invoice", "inquiry", "hidden", "1", "Check")
+		_upsert_client_script(
+			"Inquiry - Commercial Pipeline (Sales Invoice)", "Sales Invoice", SALES_INVOICE_CLIENT_SCRIPT_JS
+		)
+
+
 def _add_custom_field(dt, fieldname, label, options, insert_after, fieldtype="Link"):
 	name = f"{dt}-{fieldname}"
 	if frappe.db.exists("Custom Field", name):
@@ -1339,6 +1552,41 @@ def setup_item_supplier_customization():
 
 
 # ---------------------------------------------------------------------------
+# Structured bank details + seller address on Supplier, for Indent -- "SELLER"
+# and "BANK DETAILS" fetch straight from whichever Supplier is picked as an
+# Indent's own seller (see indent.json). smart_app.supplier_import already
+# writes a pipe-delimited "Key: Value | Key: Value" summary into the native
+# `supplier_details` field for all 345 imported suppliers; these are the
+# structured fields Indent actually reads, backfilled once from that same
+# text (see backfill_supplier_bank_details) and self-healing from then on
+# (see ensure_supplier_bank_details, utils.py, Supplier.validate) for anyone
+# who keeps typing new suppliers' details the same way. They're always
+# plain editable fields too -- filling them in directly for a brand-new
+# Supplier is the more robust path going forward, not a requirement to keep
+# writing that exact text shape.
+# ---------------------------------------------------------------------------
+
+SUPPLIER_BANK_FIELDS = (
+	# fieldname, label, fieldtype, insert_after
+	("indent_bank_details_section", "Bank Details (for Indent)", "Section Break", "supplier_details"),
+	("bank_beneficiary_name", "Beneficiary Name", "Data", "indent_bank_details_section"),
+	("bank_name", "Bank Name", "Data", "bank_beneficiary_name"),
+	("column_break_indent_bank", None, "Column Break", "bank_name"),
+	("bank_account_no", "Account No", "Data", "column_break_indent_bank"),
+	("swift_code", "SWIFT Code", "Data", "bank_account_no"),
+	("bank_address", "Bank Address", "Small Text", "swift_code"),
+	("seller_address_display", "Address (for Indent)", "Small Text", "bank_address"),
+)
+
+
+def setup_supplier_bank_fields():
+	if not frappe.db.exists("DocType", "Supplier"):
+		return
+	for fieldname, label, fieldtype, insert_after in SUPPLIER_BANK_FIELDS:
+		_add_custom_field("Supplier", fieldname, label, None, insert_after, fieldtype=fieldtype)
+
+
+# ---------------------------------------------------------------------------
 # Print Format
 # ---------------------------------------------------------------------------
 
@@ -1412,6 +1660,188 @@ def setup_print_format():
 
 
 # ---------------------------------------------------------------------------
+# Indent Print Format -- laid out to match the firm's own indent_template.pdf
+# exactly (content and structure; the letterhead/logo/NTN header at the top
+# of that PDF is left to the site's own Letter Head, not baked in here).
+# The FOR BANKER / FOR BUYER / FOR SHIPPER clauses and the Shipping Marks
+# wording are deliberately hardcoded, not doc fields -- the whole point
+# (see the task this was built for) is that they read identically on every
+# single Indent; only {{ doc.customer_name }} varies in the Shipping Marks
+# block, exactly as in the source template.
+# ---------------------------------------------------------------------------
+
+
+def setup_indent_print_format():
+	html = r"""
+<div class="indent-print" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #111;">
+<style>
+	.indent-print table { border-collapse: collapse; width: 100%; margin-bottom: 6px; }
+	.indent-print th, .indent-print td { border: 1px solid #333; padding: 4px 6px; vertical-align: top; }
+	.indent-print th { background: #e9ecef; text-align: left; }
+	.indent-print .label-cell { font-weight: bold; width: 18%; background: #f6f6f6; }
+	.indent-print .no-border td, .indent-print .no-border th { border: none; padding: 2px 0; }
+	.indent-print h2 { text-align: center; text-decoration: underline; margin: 4px 0 10px; }
+</style>
+
+<h2>INDENT</h2>
+
+<table>
+	<tr>
+		<td class="label-cell">INDENT NO</td>
+		<td>{{ doc.name }}</td>
+		<td class="label-cell">DATE</td>
+		<td>{{ frappe.utils.formatdate(doc.indent_date) }}</td>
+	</tr>
+</table>
+
+<table>
+	<tr>
+		<th style="width: 50%">SELLER:</th>
+		<th>BUYER:</th>
+	</tr>
+	<tr>
+		<td>
+			<b>{{ doc.supplier_name or "" }}</b><br>
+			{{ (doc.seller_address_display or "").replace("\n", "<br>") | safe }}
+		</td>
+		<td>
+			<b>{{ doc.customer_name or "" }}</b><br>
+			{{ (doc.customer_address_display or "").replace("\n", "<br>") | safe }}
+		</td>
+	</tr>
+</table>
+
+<table>
+	<tr>
+		<th>PRODUCT DESCRIPTION</th>
+		<th style="width: 10%">HS CODE</th>
+		<th style="width: 12%">QUANTITY</th>
+		<th style="width: 15%">UNIT PRICE {{ doc.currency }}</th>
+		<th style="width: 15%">TOTAL VALUE {{ doc.currency }}</th>
+	</tr>
+	{% for row in doc.items %}
+	<tr>
+		<td>{{ row.item_name or row.item_code }}{% if row.description %}<br><i>({{ row.description }})</i>{% endif %}</td>
+		<td>{{ row.hs_code or "" }}</td>
+		<td>{{ row.qty }} {{ row.uom or "" }}</td>
+		<td>{{ "%.2f"|format(row.rate or 0) }}</td>
+		<td>{{ "%.2f"|format(row.amount or 0) }}</td>
+	</tr>
+	{% endfor %}
+	<tr>
+		<td colspan="4" style="text-align: right;"><b>TOTAL VALUE NET TO SUPPLIER {{ doc.currency }}</b></td>
+		<td><b>{{ "%.2f"|format(doc.total_amount or 0) }}</b></td>
+	</tr>
+</table>
+
+<table>
+	<tr><td colspan="6"><b>TERMS &amp; CONDITIONS:</b></td></tr>
+	<tr>
+		<td class="label-cell">PAYMENT TERMS</td><td>{{ doc.payment_terms or "" }}</td>
+		<td class="label-cell">INCOTERM</td><td>{{ doc.incoterm or "" }}</td>
+		<td class="label-cell">LEAD TIME</td><td>{{ doc.lead_time or "" }}</td>
+	</tr>
+	<tr>
+		<td class="label-cell">PORT OF LOADING</td><td>{{ doc.port_of_loading or "" }}</td>
+		<td class="label-cell">TRANS-SHIPMENT</td><td>{{ doc.trans_shipment or "" }}</td>
+		<td class="label-cell">GMP</td><td>{{ doc.gmp_availability or "" }}</td>
+	</tr>
+	<tr>
+		<td class="label-cell">DESTINATION</td><td>{{ doc.destination or "" }}</td>
+		<td class="label-cell">PARTIAL SHIPMENT</td><td>{{ doc.partial_shipment or "" }}</td>
+		<td class="label-cell">FTA</td><td>{{ doc.fta_availability or "" }}</td>
+	</tr>
+	<tr>
+		<td class="label-cell">ORIGIN</td><td>{{ doc.origin or "" }}</td>
+		<td class="label-cell">PACKING</td><td>{{ doc.packing or "" }}</td>
+		<td class="label-cell">WS</td><td>{{ doc.ws_availability or "" }}</td>
+	</tr>
+</table>
+
+<table>
+	<tr><td colspan="2"><b>BANK DETAILS:</b></td></tr>
+	<tr><td class="label-cell">BENEFICIARY NAME</td><td>{{ doc.bank_beneficiary_name or "" }}</td></tr>
+	<tr><td class="label-cell">BANK NAME</td><td>{{ doc.bank_name or "" }}</td></tr>
+	<tr><td class="label-cell">BANK ADDRESS</td><td>{{ doc.bank_address or "" }}</td></tr>
+	<tr><td class="label-cell">ACCOUNT NO</td><td>{{ doc.bank_account_no or "" }}</td></tr>
+	<tr><td class="label-cell">SWIFT CODE</td><td>{{ doc.swift_code or "" }}</td></tr>
+</table>
+
+<table>
+	<tr>
+		<td class="label-cell" style="text-align: center;">FOR<br>BANKER</td>
+		<td>
+			<b>VALIDITY:</b> THIS INDENT IS VALID FOR 30 DAYS FROM THE DATE OF ISSUE FOR ESTABLISHING THE BANK
+			INSTRUMENT. THIS BANK INSTRUMENT MUST REMAIN VALID FOR 90 DAYS AND AN ADDITIONAL 15 DAYS FOR NEGOTIATION.<br>
+			<b>PAYMENT CLAUSE (71A):</b> CLAUSE 71A MUST INDICATE "OUR" AT THE TIME OF PAYMENT REMITTANCE TO ENSURE
+			THAT THE NET AMOUNT IS RECEIVED BY THE BENEFICIARY/SUPPLIER WITHOUT ANY DEDUCTIONS.
+		</td>
+	</tr>
+	<tr>
+		<td class="label-cell" style="text-align: center;">FOR<br>BUYER</td>
+		<td>
+			ANY DISCREPANCY REGARDING THE QUALITY OR QUANTITY OF THE MATERIAL MUST BE COMMUNICATED WITHIN 30 DAYS
+			OF THE MATERIAL'S ARRIVAL.<br>
+			ANY QUALITY-RELATED DISCREPANCY MUST BE SUPPORTED BY A TEST REPORT BASED ON A MUTUALLY AGREED METHOD
+			OF TESTING.
+		</td>
+	</tr>
+	<tr>
+		<td class="label-cell" style="text-align: center;">FOR<br>SHIPPER</td>
+		<td>
+			THE MATERIAL MUST HAVE A MINIMUM OF 85% SHELF-LIFE REMAINING AT THE TIME OF ARRIVAL AT THE DESTINATION
+			PORT TO ENSURE COMPLIANCE WITH THE IMPORT POLICY OF PAKISTAN.<br>
+			NON-NEGOTIABLE DOCUMENTS INCLUDING INVOICE, PACKING LIST, COA, GMP, FORM 3, FORM 7, FTA &amp; AWB MUST
+			BE EMAILED TO THE AGENT FOR APPROVAL PRIOR TO SHIPMENT.<br>
+			THE BUYER'S NTN NUMBER MUST BE CLEARLY MENTIONED ON THE AIRWAY BILL (AWB) OR BILL OF LADING (AWB).<br>
+			THE ORIGINAL INVOICE AND PACKING LIST MUST BE AFFIXED TO EACH DRUM, CARTON, TIN, OR BOX TO AVOID ANY
+			PENALTY CHARGES.
+		</td>
+	</tr>
+	<tr>
+		<td class="label-cell" style="text-align: center;">SHIPPING<br>MARKS:</td>
+		<td style="text-align: center;">
+			<b>BENEFICIARY NAME &amp; ORIGIN</b><br>
+			{{ doc.customer_name or "" }} / {{ doc.company }} / LAHORE<br>
+			<b>MATERIAL NAME</b> NET &amp; GROSS WEIGHT, QUANTITY, BATCH NO, MFG DATE &amp; EXPIRY DATE
+		</td>
+	</tr>
+</table>
+
+{% if doc.terms %}
+<div style="margin-top: 8px;"><b>GENERAL TERMS AND CONDITIONS:</b><br>{{ doc.terms }}</div>
+{% endif %}
+
+<table class="no-border" style="margin-top: 30px;">
+	<tr>
+		<td style="width: 50%; border-top: 1px solid #333; padding-top: 4px;"><b>INDENTOR SEAL &amp; SIGNATURE</b></td>
+		<td style="border-top: 1px solid #333; padding-top: 4px;"><b>BUYER'S SEAL &amp; SIGNATURE</b></td>
+	</tr>
+</table>
+</div>
+""".strip()
+
+	if frappe.db.exists("Print Format", "Indent Standard"):
+		pf = frappe.get_doc("Print Format", "Indent Standard")
+	else:
+		pf = frappe.new_doc("Print Format")
+		pf.name = "Indent Standard"
+		pf.doc_type = "Indent"
+		pf.module = MODULE
+		pf.print_format_type = "Jinja"
+		pf.standard = "No"
+		pf.disabled = 0
+
+	changed = pf.is_new() or pf.html != html
+	pf.html = html
+
+	if pf.is_new():
+		pf.insert(ignore_permissions=True)
+	elif changed:
+		pf.save(ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
 # Workspace (independent module, shortcuts, sidebar item, charts, KPIs)
 # ---------------------------------------------------------------------------
 
@@ -1432,6 +1862,7 @@ LINK_CARDS = [
 			{"label": "Inquiry Payment Mode", "link_type": "DocType", "link_to": "Inquiry Payment Mode"},
 			{"label": "Inquiry Incoterm", "link_type": "DocType", "link_to": "Inquiry Incoterm"},
 			{"label": "Inquiry Category", "link_type": "DocType", "link_to": "Inquiry Category"},
+			{"label": "Indent Trade Term", "link_type": "DocType", "link_to": "Indent Trade Term"},
 		],
 	},
 	{
@@ -1442,6 +1873,9 @@ LINK_CARDS = [
 			{"label": "Quotation", "link_type": "DocType", "link_to": "Quotation"},
 			{"label": "Request for Quotation", "link_type": "DocType", "link_to": "Request for Quotation"},
 			{"label": "Supplier Quotation", "link_type": "DocType", "link_to": "Supplier Quotation"},
+			{"label": "Sales Order", "link_type": "DocType", "link_to": "Sales Order"},
+			{"label": "Sales Invoice", "link_type": "DocType", "link_to": "Sales Invoice"},
+			{"label": "Indent", "link_type": "DocType", "link_to": "Indent"},
 		],
 	},
 	{
@@ -1949,6 +2383,26 @@ def backfill_item_default_warehouse():
 		item = frappe.get_doc("Item", item_code)
 		item.append("item_defaults", {"company": company, "default_warehouse": warehouse})
 		item.save(ignore_permissions=True)
+
+
+def backfill_supplier_bank_details():
+	"""ensure_supplier_bank_details (utils.py, Supplier.validate) only fixes
+	up a Supplier's structured bank_*/seller_address_display fields on that
+	Supplier's own next save -- applies the same parse directly to every
+	Supplier that already existed before those fields were added, so all
+	345 imported by smart_app.supplier_import get their Indent-ready bank
+	details without needing to be individually re-saved first. Only ever
+	fills a field that's currently blank."""
+	from smart_app.smart_app.utils import parse_supplier_details_text
+
+	bank_fields = ["bank_beneficiary_name", "bank_name", "bank_address", "bank_account_no", "swift_code"]
+	fields = ["name", "supplier_details", "seller_address_display", *bank_fields]
+
+	for supplier in frappe.get_all("Supplier", fields=fields):
+		parsed = parse_supplier_details_text(supplier.get("supplier_details"))
+		for fieldname, value in parsed.items():
+			if not supplier.get(fieldname):
+				frappe.db.set_value("Supplier", supplier.name, fieldname, value, update_modified=False)
 
 
 def backfill_rfq_quotation_links():

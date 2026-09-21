@@ -412,3 +412,83 @@ def sync_marketer_permission_for_employee(employee_name):
 		).insert(ignore_permissions=True)
 	elif existing:
 		frappe.delete_doc("User Permission", existing.name, ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
+# Indent: Supplier bank details, and Sales Invoice -> Inquiry traceability.
+# ---------------------------------------------------------------------------
+
+# The pipe-delimited "Key: Value | Key: Value" shape smart_app.supplier_import
+# writes into Supplier.supplier_details, e.g. "Contact Person: X | Office
+# Address: Y | Beneficiary Name: Z | Bank Name: W | Bank Address: V |
+# Account No: U | SWIFT Code: T" -- and that manually-entered Suppliers tend
+# to follow too, since it's what this app's own Customer Details section
+# shows as an example. Keys are matched case-insensitively.
+BANK_DETAIL_KEYS = {
+	"beneficiary name": "bank_beneficiary_name",
+	"bank name": "bank_name",
+	"bank address": "bank_address",
+	"account no": "bank_account_no",
+	"swift code": "swift_code",
+}
+ADDRESS_KEYS = ("office address", "factory address")
+
+
+def parse_supplier_details_text(text):
+	"""Best-effort parse of Supplier.supplier_details' free text (see
+	BANK_DETAIL_KEYS above) into the structured bank_*/seller_address_display
+	fields Indent fetches from directly (see setup_supplier_bank_fields in
+	install.py). Returns only the keys it actually found -- never guesses,
+	never overwrites (see ensure_supplier_bank_details below, which only
+	fills a field that's still blank)."""
+	result = {}
+	if not text:
+		return result
+
+	for segment in text.split("|"):
+		if ":" not in segment:
+			continue
+		key, _, value = segment.partition(":")
+		key = key.strip().lower()
+		value = value.strip()
+		if not value:
+			continue
+		if key in BANK_DETAIL_KEYS:
+			result[BANK_DETAIL_KEYS[key]] = value
+		elif key in ADDRESS_KEYS and "seller_address_display" not in result:
+			result["seller_address_display"] = value
+
+	return result
+
+
+def ensure_supplier_bank_details(doc, method=None):
+	"""Supplier.validate: self-healing fill of the structured bank_*/
+	seller_address_display fields from supplier_details' free text,
+	whenever one of them is still blank -- covers both the bulk import
+	(supplier_import.py, which writes exactly this pipe-delimited shape) and
+	anyone typing a new Supplier's details by hand the same way. Only ever
+	fills a blank field; a value entered directly (by import backfill or by
+	hand) always wins and is never overwritten."""
+	parsed = parse_supplier_details_text(doc.get("supplier_details"))
+	for fieldname, value in parsed.items():
+		if not doc.get(fieldname):
+			doc.set(fieldname, value)
+
+
+def set_inquiry_from_sales_order(doc, method=None):
+	"""Sales Invoice.validate: best-effort carry-over of the `inquiry`
+	Custom Field (see setup_sales_pipeline_integration in install.py) from
+	whichever Sales Order this Sales Invoice's items were raised against --
+	core ERPNext's own Sales Order -> Sales Invoice mapper
+	(erpnext.selling.doctype.sales_order.sales_order.make_sales_invoice) has
+	a fixed field_map we can't edit and doesn't know about a Custom Field we
+	added after the fact, so it never carries `inquiry` over on its own.
+	Needed so Indent (built from a submitted Sales Invoice) can still trace
+	all the way back to the originating Inquiry, the same way Request for
+	Quotation's own `inquiry` field does for the buying side."""
+	if doc.get("inquiry"):
+		return
+
+	sales_order = next((d.sales_order for d in doc.get("items") or [] if d.get("sales_order")), None)
+	if sales_order:
+		doc.inquiry = frappe.db.get_value("Sales Order", sales_order, "inquiry")
