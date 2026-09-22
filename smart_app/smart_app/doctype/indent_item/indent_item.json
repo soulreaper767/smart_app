@@ -8,6 +8,8 @@
   "item_code",
   "item_name",
   "description",
+  "custom_pharmacopeia",
+  "custom_item_grade",
   "hs_code",
   "qty",
   "uom",
@@ -36,6 +38,24 @@
    "fieldname": "description",
    "fieldtype": "Small Text",
    "label": "Product Description"
+  },
+  {
+   "columns": 1,
+   "description": "Defaults from the Item master, but changeable here -- constrained to whatever options Item's own Pharmacopeia field offers (see setup_item_variant_dropdowns in install.py). Add new options on Item itself.",
+   "fetch_from": "item_code.custom_pharmacopeia",
+   "fieldname": "custom_pharmacopeia",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Pharmacopeia"
+  },
+  {
+   "columns": 1,
+   "description": "Defaults from the Item master, but changeable here -- constrained to whatever options Item's own Item Grade field offers (see setup_item_variant_dropdowns in install.py). Add new options on Item itself.",
+   "fetch_from": "item_code.custom_item_grade",
+   "fieldname": "custom_item_grade",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Item Grade"
   },
   {
    "columns": 2,

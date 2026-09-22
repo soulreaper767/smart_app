@@ -10,6 +10,7 @@
   "naming_series",
   "inquiry_date",
   "inquiry_status",
+  "status_change_reason",
   "category",
   "column_break_1",
   "company",
@@ -38,6 +39,8 @@
   "marketer",
   "column_break_4",
   "inquiry_officer",
+  "section_break_marketer_history",
+  "marketer_history",
   "section_break_items",
   "items",
   "section_break_trade",
@@ -80,7 +83,18 @@
    "in_standard_filter": 1,
    "label": "Status",
    "options": "Open\nQuotation\nReplied\nConverted\nLost\nClosed",
+   "permlevel": 2,
    "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.status_change_reason",
+   "description": "Shown automatically when Status is changed -- required. Set by inquiry.js the moment Status is edited; cleared again on refresh.",
+   "fieldname": "status_change_reason",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Reason for Status Change",
+   "no_copy": 1,
+   "permlevel": 2
   },
   {
    "fieldname": "category",
@@ -251,13 +265,13 @@
    "label": "People"
   },
   {
-   "description": "Employees with the Marketer role only. Auto-set to the current user when a Marketer creates a new Inquiry.",
+   "description": "Auto-filled from the Customer's own default Marketer when a new Inquiry is created for them; auto-set to the current user's own Marketer record if they hold the Marketer role. Always changeable -- every change is logged below, and you'll be asked whether to update the Customer's own default too.",
    "fieldname": "marketer",
    "fieldtype": "Link",
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Marketer",
-   "options": "Employee"
+   "options": "Marketer"
   },
   {
    "fieldname": "column_break_4",
@@ -271,6 +285,21 @@
    "in_standard_filter": 1,
    "label": "Inquiry Officer",
    "options": "User"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_marketer_history",
+   "fieldtype": "Section Break",
+   "label": "Marketer Assignment History"
+  },
+  {
+   "description": "Every assignment/reassignment of this Inquiry's Marketer, logged automatically -- see also Customer's own default Marketer, which you're prompted to update in step whenever this changes.",
+   "fieldname": "marketer_history",
+   "fieldtype": "Table",
+   "label": "Marketer History",
+   "no_copy": 1,
+   "options": "Inquiry Marketer Log",
+   "read_only": 1
   },
   {
    "fieldname": "section_break_items",
@@ -383,6 +412,12 @@
    "write": 1
   },
   {
+   "permlevel": 2,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  },
+  {
    "amend": 1,
    "cancel": 1,
    "create": 1,
@@ -404,6 +439,12 @@
    "write": 1
   },
   {
+   "permlevel": 2,
+   "read": 1,
+   "role": "Inquiry Manager",
+   "write": 1
+  },
+  {
    "create": 1,
    "email": 1,
    "export": 1,
@@ -416,6 +457,11 @@
    "write": 1
   },
   {
+   "permlevel": 2,
+   "read": 1,
+   "role": "Inquiry Officer"
+  },
+  {
    "create": 1,
    "email": 1,
    "print": 1,
@@ -424,6 +470,11 @@
    "share": 1,
    "submit": 1,
    "write": 1
+  },
+  {
+   "permlevel": 2,
+   "read": 1,
+   "role": "Marketer"
   },
   {
    "email": 1,
@@ -441,8 +492,18 @@
    "role": "Commercial Manager"
   },
   {
+   "permlevel": 2,
+   "read": 1,
+   "role": "Commercial Manager"
+  },
+  {
    "email": 1,
    "print": 1,
+   "read": 1,
+   "role": "Commercial Officer"
+  },
+  {
+   "permlevel": 2,
    "read": 1,
    "role": "Commercial Officer"
   }

@@ -228,6 +228,7 @@ def setup():
 	run_step(seed_master_data, "master data")
 	run_step(setup_indent_masters, "indent trade term master data")
 	run_step(setup_supplier_bank_fields, "supplier bank detail fields (for Indent)")
+	run_step(setup_customer_marketer_field, "customer marketer field")
 	run_step(setup_workflow, "workflow")
 	run_step(setup_kanban_board, "kanban board")
 	run_step(setup_dashboard_charts, "dashboard charts")
@@ -246,6 +247,7 @@ def setup():
 	run_step(setup_quotation_integration, "quotation get-items-from + create-rfq integration")
 	run_step(setup_sales_pipeline_integration, "sales order/invoice get-items-from + create-indent integration")
 	run_step(setup_item_master_columns, "item master columns (UOM/pharmacopeia/grade)")
+	run_step(setup_item_variant_dropdowns, "pharmacopeia/grade as editable dropdowns everywhere")
 	run_step(setup_item_supplier_customization, "multi-supplier management on Item (type/preferred)")
 	run_step(setup_test_users, "test users")
 	run_step(backfill_commercial_manager_inquiry_user_role, "backfill Inquiry User role for Commercial Manager")
@@ -253,6 +255,8 @@ def setup():
 	run_step(backfill_party_price_lists, "backfill default Price Lists for existing Customers/Suppliers")
 	run_step(backfill_item_default_warehouse, "backfill default warehouse on existing stock Items")
 	run_step(backfill_supplier_bank_details, "backfill supplier bank details (for Indent)")
+	run_step(backfill_convert_inquiry_marketer_to_marketer_doctype, "convert Inquiry.marketer from Employee to Marketer")
+	run_step(backfill_cleanup_stale_employee_marketer_permissions, "cleanup stale Employee-based marketer User Permissions")
 	run_step(backfill_rfq_quotation_links, "backfill quotation link on existing Requests for Quotation")
 	run_step(setup_email_branding, "email footer branding")
 	run_step(setup_email_templates, "RFQ email template")
@@ -606,7 +610,15 @@ def setup_workflow():
 	the first time this ran."""
 	_ensure_workflow_masters()
 
-	all_roles = ["Inquiry Officer", "Marketer", "Inquiry Manager"]
+	# Status changes are Inquiry Manager (+ System Manager, implicitly, via
+	# the Administrator/System Manager bypass) only -- see inquiry_status's
+	# own permlevel 2 in inquiry.json, which backs this up at the field
+	# level too (an Inquiry Officer/Marketer clicking a transition that
+	# somehow still fired would have the change silently reverted on save,
+	# per Frappe's own reset_values_if_no_permlevel_access -- but keeping
+	# the transitions themselves manager_only means they never see a button
+	# that wouldn't work in the first place). Every transition uses the
+	# same role for this reason -- there's no longer an "all_roles" tier.
 	manager_only = ["Inquiry Manager"]
 
 	# Every state uses the same "Inquiry User" umbrella role (auto-synced
@@ -616,18 +628,18 @@ def setup_workflow():
 	# but allow_edit applies to the WHOLE document, not just inquiry_status --
 	# that blocked Commercial Manager from ever setting commercial_officer
 	# once an Inquiry reached one of those statuses, which matters more than
-	# the extra strictness was worth. DocPerm-level and Permission Level 1
+	# the extra strictness was worth. DocPerm-level and Permission Level 1/2
 	# restrictions still apply regardless of workflow state.
 	edit_role_by_state = {state: "Inquiry User" for state in STATUSES}
 
 	transitions = [
-		("Open", "Send for Quotation", "Quotation", all_roles),
-		("Open", "Mark as Replied", "Replied", all_roles),
-		("Quotation", "Mark as Replied", "Replied", all_roles),
-		("Open", "Mark as Lost", "Lost", all_roles),
-		("Quotation", "Mark as Lost", "Lost", all_roles),
-		("Replied", "Mark as Lost", "Lost", all_roles),
-		("Replied", "Convert", "Converted", ["Marketer", "Inquiry Manager"]),
+		("Open", "Send for Quotation", "Quotation", manager_only),
+		("Open", "Mark as Replied", "Replied", manager_only),
+		("Quotation", "Mark as Replied", "Replied", manager_only),
+		("Open", "Mark as Lost", "Lost", manager_only),
+		("Quotation", "Mark as Lost", "Lost", manager_only),
+		("Replied", "Mark as Lost", "Lost", manager_only),
+		("Replied", "Convert", "Converted", manager_only),
 		("Converted", "Close", "Closed", manager_only),
 		("Lost", "Close", "Closed", manager_only),
 		("Closed", "Reopen", "Open", manager_only),
@@ -657,24 +669,32 @@ def setup_workflow():
 			workflow.append("states", {"state": state, "doc_status": "0", "allow_edit": edit_role_by_state[state]})
 			changed = True
 
+	# Rebuilt from `transitions` on every run (not just added-to) -- a
+	# purely additive reconcile would have left Inquiry Officer/Marketer's
+	# old transition rows in place forever once they were narrowed to
+	# manager_only above, since nothing would ever have removed them.
+	wanted_transitions = {
+		(from_state, action, next_state, role)
+		for from_state, action, next_state, roles in transitions
+		for role in roles
+	}
 	existing_transitions = {
 		(t.state, t.action, t.next_state, t.allowed) for t in workflow.get("transitions")
 	}
-	for from_state, action, next_state, roles in transitions:
-		for role in roles:
-			key = (from_state, action, next_state, role)
-			if key not in existing_transitions:
-				workflow.append(
-					"transitions",
-					{
-						"state": from_state,
-						"action": action,
-						"next_state": next_state,
-						"allowed": role,
-						"allow_self_approval": 1,
-					},
-				)
-				changed = True
+	if wanted_transitions != existing_transitions:
+		workflow.set("transitions", [])
+		for from_state, action, next_state, role in sorted(wanted_transitions):
+			workflow.append(
+				"transitions",
+				{
+					"state": from_state,
+					"action": action,
+					"next_state": next_state,
+					"allowed": role,
+					"allow_self_approval": 1,
+				},
+			)
+		changed = True
 
 	if workflow.is_new():
 		workflow.insert(ignore_permissions=True)
@@ -1474,6 +1494,94 @@ def _set_property_setter(doctype, fieldname, property_name, value, property_type
 
 
 # ---------------------------------------------------------------------------
+# Pharmacopeia / Item Grade as editable dropdowns everywhere in the pipeline
+# -- Inquiry, Quotation, Request for Quotation, Supplier Quotation, Sales
+# Order, Sales Invoice, and Indent -- constrained to exactly the options
+# Item's own custom_pharmacopeia/custom_item_grade Select fields offer.
+# setup_item_master_columns above already creates custom_pharmacopeia/
+# custom_item_grade as *read-only* Custom Fields on the three doctypes it
+# covers; this reconciles those (and creates the two more this needs --
+# Sales Order Item, Sales Invoice Item -- as core doctypes) into editable
+# Select fields, and is the single place that mirrors Item's current
+# options onto all seven, self-healing on every migrate. Someone adding a
+# new Pharmacopeia/Grade only ever does it once, on Item itself (e.g. via
+# Customize Form) -- never at the transaction level.
+# ---------------------------------------------------------------------------
+
+ITEM_VARIANT_FIELDS = {"custom_pharmacopeia": "Pharmacopeia", "custom_item_grade": "Item Grade"}
+
+# child doctype -> its own Link-to-Item fieldname. Inquiry Item / Indent
+# Item are this app's own doctypes (the field is declared directly in
+# their own JSON as fieldtype "Select" already -- only the `options`
+# Property Setter below applies to them); everything else is a core
+# ERPNext doctype, customised non-invasively via Custom Field, the same
+# way setup_item_master_columns already customises UOM/rate/amount on it.
+ITEM_VARIANT_CHILD_DOCTYPES = {
+	"Inquiry Item": "item",
+	"Quotation Item": "item_code",
+	"Request for Quotation Item": "item_code",
+	"Supplier Quotation Item": "item_code",
+	"Sales Order Item": "item_code",
+	"Sales Invoice Item": "item_code",
+	"Indent Item": "item_code",
+}
+ITEM_VARIANT_OWN_DOCTYPES = {"Inquiry Item", "Indent Item"}
+
+
+def setup_item_variant_dropdowns():
+	item_meta = frappe.get_meta("Item")
+	options_by_field = {}
+	for fieldname in ITEM_VARIANT_FIELDS:
+		item_field = item_meta.get_field(fieldname)
+		if item_field and item_field.fieldtype == "Select":
+			options_by_field[fieldname] = item_field.options or ""
+
+	if not options_by_field:
+		# This site doesn't actually have custom_pharmacopeia/custom_item_grade
+		# as Select fields on Item -- nothing to mirror anywhere.
+		return
+
+	for dt, item_link_fieldname in ITEM_VARIANT_CHILD_DOCTYPES.items():
+		if not frappe.db.exists("DocType", dt):
+			continue
+
+		for fieldname, options in options_by_field.items():
+			if dt not in ITEM_VARIANT_OWN_DOCTYPES:
+				name = f"{dt}-{fieldname}"
+				if frappe.db.exists("Custom Field", name):
+					cf = frappe.get_doc("Custom Field", name)
+					changed = False
+					if cf.fieldtype != "Select":
+						cf.fieldtype = "Select"
+						changed = True
+					if cf.read_only:
+						cf.read_only = 0
+						changed = True
+					if changed:
+						cf.save(ignore_permissions=True)
+				else:
+					frappe.get_doc(
+						{
+							"doctype": "Custom Field",
+							"dt": dt,
+							"fieldname": fieldname,
+							"label": ITEM_VARIANT_FIELDS[fieldname],
+							"fieldtype": "Select",
+							"fetch_from": f"{item_link_fieldname}.{fieldname}",
+							"insert_after": item_link_fieldname,
+							"in_list_view": 1,
+							"columns": 1,
+							"allow_on_submit": 1,
+						}
+					).insert(ignore_permissions=True)
+
+			# Mirrors Item's current options onto this field -- both the
+			# Custom Field case above and this app's own doctypes, where
+			# the field is already declared Select in their own JSON.
+			_set_property_setter(dt, fieldname, "options", options, "Text")
+
+
+# ---------------------------------------------------------------------------
 # Multi-supplier management on Item: the native "Supplier Items" table
 # (Item Supplier child doctype) only ever carried `supplier` +
 # `supplier_part_no` -- enough to *list* several suppliers per Item, but no
@@ -1571,6 +1679,31 @@ def setup_supplier_bank_fields():
 		return
 	for fieldname, label, fieldtype, insert_after in SUPPLIER_BANK_FIELDS:
 		_add_custom_field("Supplier", fieldname, label, None, insert_after, fieldtype=fieldtype)
+
+
+# ---------------------------------------------------------------------------
+# Customer.marketer -- replaces core ERPNext's own Sales Team/Sales Person
+# concept for this app's purposes with a direct Link to this app's own
+# Marketer doctype. A new Inquiry for this Customer defaults its own
+# `marketer` field from here (Inquiry.set_marketer_from_customer_or_user),
+# and inquiry.js offers to update this field back whenever an Inquiry's own
+# Marketer is changed -- so the two stay in step by choice, never silently.
+# ---------------------------------------------------------------------------
+
+
+def setup_customer_marketer_field():
+	if not frappe.db.exists("DocType", "Customer"):
+		return
+	_add_custom_field("Customer", "marketer", "Marketer", "Marketer", insert_after="customer_name")
+
+	# Native Sales Team section -- superseded by the field above for this
+	# app's purposes. Hidden, not deleted: existing Sales Team data (if any)
+	# is left completely intact, and any other part of the site that still
+	# relies on Sales Person/commission reporting is unaffected -- this
+	# only changes what a user editing a Customer *sees*.
+	for fieldname in ("sales_team", "default_sales_partner"):
+		if frappe.get_meta("Customer").has_field(fieldname):
+			_set_property_setter("Customer", fieldname, "hidden", "1", "Check")
 
 
 # ---------------------------------------------------------------------------
@@ -2528,6 +2661,73 @@ def backfill_supplier_bank_details():
 		for fieldname, value in parsed.items():
 			if not supplier.get(fieldname):
 				frappe.db.set_value("Supplier", supplier.name, fieldname, value, update_modified=False)
+
+
+def backfill_convert_inquiry_marketer_to_marketer_doctype():
+	"""Inquiry.marketer used to link straight to Employee; it now links to
+	this app's own Marketer doctype instead (see setup_customer_marketer_field
+	and the Marketer doctype itself), so Customer can share the same field.
+	Every distinct Employee an existing Inquiry still names as its Marketer
+	gets its own Marketer record (reusing one that already exists for that
+	Employee's own linked User, if any -- see ensure_marketer_record_for_user
+	in utils.py, which every *new* Employee/User pairing already goes
+	through), and every such Inquiry is repointed at it directly via SQL --
+	bypassing Inquiry.validate() deliberately, since this is a one-time
+	field-target migration, not a real reassignment, and shouldn't log a
+	marketer_history entry or ask anyone to update a Customer."""
+	if not frappe.get_meta("Inquiry").has_field("marketer_history"):
+		return
+
+	old_values = frappe.db.sql(
+		"select distinct marketer from `tabInquiry` where marketer is not null and marketer != ''",
+		pluck=True,
+	)
+	if not old_values:
+		return
+
+	employee_names = set(frappe.get_all("Employee", pluck="name"))
+	marketer_names = set(frappe.get_all("Marketer", pluck="name"))
+
+	for value in old_values:
+		if value in marketer_names or value not in employee_names:
+			# Already a Marketer record, or not a recognisable Employee
+			# reference either -- nothing safe to convert, leave it alone.
+			continue
+
+		employee = frappe.db.get_value("Employee", value, ["employee_name", "user_id"], as_dict=True)
+		marketer_name = None
+		if employee.user_id:
+			marketer_name = frappe.db.get_value("Marketer", {"user": employee.user_id}, "name")
+		if not marketer_name:
+			marketer_name = employee.employee_name or value
+			if frappe.db.exists("Marketer", marketer_name):
+				marketer_name = f"{marketer_name} ({value})"
+			frappe.get_doc(
+				{
+					"doctype": "Marketer",
+					"marketer_name": marketer_name,
+					"user": employee.user_id,
+					"employee": value,
+				}
+			).insert(ignore_permissions=True)
+			marketer_names.add(marketer_name)
+
+		frappe.db.sql("update `tabInquiry` set marketer = %s where marketer = %s", (marketer_name, value))
+
+	frappe.db.commit()
+
+
+def backfill_cleanup_stale_employee_marketer_permissions():
+	"""The old Marketer -> Employee User Permission (see the since-removed
+	sync_marketer_permission_for_employee in utils.py) is inert now that
+	Inquiry.marketer links to Marketer, not Employee -- but left in the
+	database it's just confusing clutter. The new Marketer -> User
+	Permission is maintained separately (sync_marketer_user_permission)."""
+	stale = frappe.get_all(
+		"User Permission", filters={"allow": "Employee", "applicable_for": "Inquiry"}, pluck="name"
+	)
+	for name in stale:
+		frappe.delete_doc("User Permission", name, ignore_permissions=True)
 
 
 def backfill_rfq_quotation_links():

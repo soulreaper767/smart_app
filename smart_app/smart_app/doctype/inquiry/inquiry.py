@@ -10,16 +10,20 @@ from frappe.contacts.doctype.address.address import get_default_address
 
 from smart_app.smart_app.utils import get_default_warehouse_for_company
 
+INQUIRY_EDIT_ROLES = {"Inquiry Officer", "Marketer", "Inquiry Manager"}
+
 
 class Inquiry(Document):
 	def validate(self):
-		self.set_marketer_from_user()
+		self.set_marketer_from_customer_or_user()
 		self.enforce_marketer_restriction()
 		self.pull_customer_contact_details()
+		self.log_marketer_change()
+		self.enforce_status_change_reason()
 		self.sync_commercial_status()
 
 	def before_insert(self):
-		self.set_marketer_from_user()
+		self.set_marketer_from_customer_or_user()
 
 	def before_update_after_submit(self):
 		"""Frappe only runs the controller's validate() for a plain "save"
@@ -28,26 +32,39 @@ class Inquiry(Document):
 		and gets saved again with no docstatus change, that's a distinct
 		"update_after_submit" action, and the ONLY controller hook Frappe
 		calls for it is before_update_after_submit/on_update_after_submit.
-		validate() (and therefore sync_commercial_status()) never runs.
-
-		assign_commercial_officer() below always hits exactly this path --
-		it edits a field (commercial_officer) on an already-submitted Inquiry
-		and calls doc.save() -- so without this hook, commercial_status
-		silently never advanced to "Assigned" no matter how correct the
-		sync_commercial_status() logic itself was."""
+		validate() never runs -- so anything validate() would otherwise
+		catch (marketer reassignment logging, the mandatory status-change
+		reason, commercial_status syncing) needs repeating here too, since
+		every one of these can still happen on an already-submitted Inquiry
+		(assign_commercial_officer always hits this path, and workflow
+		transitions like Replied -> Convert commonly happen well after
+		submission)."""
+		self.log_marketer_change()
+		self.enforce_status_change_reason()
 		self.sync_commercial_status()
 
-	def set_marketer_from_user(self):
-		"""Auto-select the Marketer field for users who hold the Marketer role."""
+	def set_marketer_from_customer_or_user(self):
+		"""Auto-fill Marketer, in priority order: (1) leave alone if already
+		set; (2) the Customer's own default Marketer, if it has one -- a
+		Customer with an assigned Marketer should default every new Inquiry
+		to them; (3) the current user's own Marketer record, if they hold
+		the Marketer role -- so a Marketer creating their own Inquiry for a
+		Customer with no default yet doesn't have to pick themselves."""
 		if self.marketer:
 			return
+
+		if self.inquiry_source:
+			customer_marketer = frappe.db.get_value("Customer", self.inquiry_source, "marketer")
+			if customer_marketer:
+				self.marketer = customer_marketer
+				return
 
 		if "Marketer" not in frappe.get_roles(frappe.session.user):
 			return
 
-		employee = get_employee_for_user(frappe.session.user)
-		if employee:
-			self.marketer = employee
+		own_marketer = get_marketer_for_user(frappe.session.user)
+		if own_marketer:
+			self.marketer = own_marketer
 
 	def enforce_marketer_restriction(self):
 		"""A user with only the Marketer role (no manager rights) may only
@@ -58,11 +75,52 @@ class Inquiry(Document):
 		if "Marketer" not in user_roles:
 			return
 
-		employee = get_employee_for_user(frappe.session.user)
-		if employee and self.marketer and self.marketer != employee:
+		own_marketer = get_marketer_for_user(frappe.session.user)
+		if own_marketer and self.marketer and self.marketer != own_marketer:
 			frappe.throw(
 				_("You can only create or update Inquiries where you are the assigned Marketer.")
 			)
+
+	def log_marketer_change(self):
+		"""Every assignment/reassignment of Marketer is recorded (not just
+		overwritten) -- see marketer_history (Inquiry Marketer Log) and the
+		"update the Customer's own default too?" prompt this drives
+		client-side (inquiry.js, update_customer_marketer below)."""
+		before = self.get_doc_before_save()
+		previous_marketer = before.marketer if before else None
+		if self.marketer == previous_marketer:
+			return
+		if not self.marketer and not previous_marketer:
+			return
+		self.append(
+			"marketer_history",
+			{
+				"previous_marketer": previous_marketer,
+				"marketer": self.marketer,
+				"changed_by": frappe.session.user,
+				"changed_on": frappe.utils.now_datetime(),
+			},
+		)
+
+	def enforce_status_change_reason(self):
+		"""Status changes are Inquiry Manager/System Manager only (see
+		inquiry_status's own permlevel 2, and every Workflow transition
+		being manager_only -- setup_workflow in install.py) -- but even a
+		Manager must give a reason, logged to the timeline rather than a
+		single field that would just get overwritten next time."""
+		if self.is_new():
+			return
+		before = self.get_doc_before_save()
+		if not before or before.inquiry_status == self.inquiry_status:
+			return
+		if not self.status_change_reason:
+			frappe.throw(_("Please provide a reason for changing the Inquiry status."))
+		self.add_comment(
+			"Info",
+			_("Status changed from {0} to {1}: {2}").format(
+				before.inquiry_status, self.inquiry_status, self.status_change_reason
+			),
+		)
 
 	def pull_customer_contact_details(self):
 		"""Refresh cached contact/address display fields from the linked Customer."""
@@ -161,25 +219,28 @@ def has_permission(doc, ptype="read", user=None):
 	return None
 
 
-def get_employee_for_user(user):
-	return frappe.db.get_value("Employee", {"user_id": user, "status": "Active"}, "name")
+def get_marketer_for_user(user):
+	return frappe.db.get_value("Marketer", {"user": user, "is_disabled": 0}, "name")
 
 
 @frappe.whitelist()
-def get_my_marketer_employee():
+def get_my_marketer():
 	"""Used by inquiry.js to auto-fill the Marketer field for the current
 	user on a new Inquiry. Deliberately a narrow whitelisted lookup rather
-	than a plain frappe.db.get_list client call, since Marketer only holds
-	`select` (not `read`) on Employee — see grant_master_data_access in
-	install.py for why."""
+	than a plain frappe.db.get_list client call, matching the same
+	least-privilege reasoning grant_master_data_access uses elsewhere."""
 	if "Marketer" not in frappe.get_roles(frappe.session.user):
 		return None
-	return get_employee_for_user(frappe.session.user)
+	return get_marketer_for_user(frappe.session.user)
 
 
 @frappe.whitelist()
 def get_customer_contact_details(customer):
-	"""Return the default contact & address display info for a Customer."""
+	"""Return the default contact/address/marketer info for a Customer --
+	used both to fill in a new Inquiry's contact fields and (via `marketer`)
+	to default its Marketer to whoever this Customer is already assigned to
+	(see set_marketer_from_customer_or_user, the server-side equivalent of
+	this for anything that doesn't go through the form, e.g. a Data Import)."""
 	if not customer:
 		return {}
 
@@ -190,6 +251,7 @@ def get_customer_contact_details(customer):
 		"contact_mobile": None,
 		"customer_address": None,
 		"address_display": None,
+		"marketer": frappe.db.get_value("Customer", customer, "marketer"),
 	}
 
 	contact_name = get_default_contact("Customer", customer)
@@ -211,20 +273,40 @@ def get_customer_contact_details(customer):
 
 @frappe.whitelist()
 def get_marketers(doctype, txt, searchfield, start, page_len, filters):
-	"""Link-field query: only Employees whose linked User has the Marketer role."""
+	"""Link-field query for the Marketer field -- active Marketers only."""
 	return frappe.db.sql(
 		"""
-		select e.name, e.employee_name
-		from `tabEmployee` e
-		inner join `tabHas Role` hr on hr.parent = e.user_id and hr.parenttype = 'User'
-		where hr.role = 'Marketer'
-			and e.status = 'Active'
-			and (e.name like %(txt)s or e.employee_name like %(txt)s)
-		order by e.employee_name
+		select name, marketer_name
+		from `tabMarketer`
+		where is_disabled = 0
+			and (name like %(txt)s or marketer_name like %(txt)s)
+		order by marketer_name
 		limit %(page_len)s offset %(start)s
 		""",
 		{"txt": f"%{txt}%", "start": start, "page_len": page_len},
 	)
+
+
+@frappe.whitelist()
+def update_customer_marketer(customer, marketer):
+	"""Called from inquiry.js when a user changes an Inquiry's Marketer and
+	confirms they also want the Customer's own default Marketer updated to
+	match -- keeps the Customer master in step going forward, without ever
+	silently overwriting it (the confirm dialog is what "asks" per the task
+	this was built for; nothing here bypasses that -- it only runs once the
+	user has already agreed).
+
+	Explicit role check + ignore_permissions, the same pattern already
+	proven elsewhere in this app (assign_commercial_officer,
+	create_customer_from_referred_party) -- generic Customer `write` is
+	deliberately Inquiry Manager only (see grant_master_data_access,
+	"Inquiry Manager also gets write, for corrections"), but anyone who can
+	edit Inquiries at all is exactly who this feature is for."""
+	if not (customer and marketer):
+		return
+	if not (set(frappe.get_roles(frappe.session.user)) & (INQUIRY_EDIT_ROLES | {"System Manager"})):
+		frappe.throw(_("You do not have permission to update this Customer."), frappe.PermissionError)
+	frappe.db.set_value("Customer", customer, "marketer", marketer)
 
 
 @frappe.whitelist()

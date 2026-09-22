@@ -45,21 +45,21 @@
   },
   {
    "columns": 1,
+   "description": "Defaults from the Item master, but changeable here -- constrained to whatever options Item's own Pharmacopeia field offers (see setup_item_variant_dropdowns in install.py). Add new options on Item itself.",
    "fetch_from": "item.custom_pharmacopeia",
    "fieldname": "custom_pharmacopeia",
-   "fieldtype": "Data",
+   "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "Pharmacopeia",
-   "read_only": 1
+   "label": "Pharmacopeia"
   },
   {
    "columns": 1,
+   "description": "Defaults from the Item master, but changeable here -- constrained to whatever options Item's own Item Grade field offers (see setup_item_variant_dropdowns in install.py). Add new options on Item itself.",
    "fetch_from": "item.custom_item_grade",
    "fieldname": "custom_item_grade",
-   "fieldtype": "Data",
+   "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "Item Grade",
-   "read_only": 1
+   "label": "Item Grade"
   },
   {
    "columns": 2,

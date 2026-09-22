@@ -61,14 +61,16 @@ branding. All covered in detail further down.
 |---|---|
 | `naming_series` | `INQ-.YYYY.-####` |
 | `inquiry_date` | defaults to today |
-| `inquiry_status` | Open / Quotation / Replied / Converted / Lost / Closed — driven by the **Inquiry Workflow**. Every state uses the same `allow_edit` role (the internal Inquiry User umbrella role — see below), so Inquiry Officer/Marketer/Inquiry Manager/Commercial Manager can all edit an Inquiry regardless of its current status; which specific *transitions* are allowed is still role-gated (only Marketer/Inquiry Manager can Convert, only Inquiry Manager can Close/Reopen) |
+| `inquiry_status` | Open / Quotation / Replied / Converted / Lost / Closed — driven by the **Inquiry Workflow**. Every state uses the same `allow_edit` role (the internal Inquiry User umbrella role — see below), so Inquiry Officer/Marketer/Inquiry Manager/Commercial Manager can all edit an Inquiry regardless of its current status; every *transition*, however, is **Inquiry Manager only** (see Status changes below) |
+| `status_change_reason` | Small Text, hidden until Status is actually edited, then mandatory — see Status changes below |
 | `category` | Link → Inquiry Category (NPD / Commercial, manager-editable) |
 | `company` | for multi-company setups |
 | `inquiry_source` | Link → Customer — quick-create a new Customer inline, just like any other Link |
 | `customer_name` | auto-fetched, read-only |
 | `contact_person` / `contact_display` / `contact_email` / `contact_mobile` / `customer_address` / `address_display` | auto-fetched from the Customer's default Contact/Address, **Permission Level 1** — hidden from **Inquiry Officer** and **Marketer**, visible to **Inquiry Manager** / **System Manager** only |
 | `is_for_referred_party` + referred party fields | when checked, capture a new party's details; a **Create Customer** button appears to turn them into a real Customer |
-| `marketer` | Link → Employee, restricted by query to employees whose linked User has the **Marketer** role; auto-set when a Marketer creates a new Inquiry |
+| `marketer` | Link → **Marketer** (this app's own doctype, not Employee — see below). Auto-filled from the Customer's own default Marketer if it has one, else from the current user's own Marketer record if they hold the Marketer role; always changeable, and every change is logged (see `marketer_history`) |
+| `marketer_history` | Table → Inquiry Marketer Log, read-only — every assignment/reassignment of `marketer`, who changed it, and when |
 | `inquiry_officer` | Link → User, defaults to the current user |
 | `items` | Table → Inquiry Item (Item + Quantity) — feeds the Quotation/RFQ pipeline below |
 | `shipment_mode` / `payment_mode` / `incoterm` | Links to the three manager-editable master lists |
@@ -140,26 +142,119 @@ least-privilege:
 | Company, Currency, Country, User | select, read |
 | Contact, Address | Inquiry Manager only (select, read) — matches the Permission Level 1 restriction that already hides these fields on the form for the other two roles |
 
-**Creating a new Marketer** uses the exact same "+ Create a New Employee"
-quick-create every other Link field in this app already has — click into the
-Marketer field, search, and "Create a New Employee" appears at the bottom
-like it does for Customer/Item, rather than a bespoke dialog. This is why
-Employee gets full create+write above (a wider surface than the
-select-only design this app started with, chosen deliberately to match core
-ERPNext's own UX). The generic Employee quick-create form has no way to also
-assign a role, though, so `auto_assign_marketer_role` (Employee `on_update`,
-in `utils.py`) fills that gap: whenever an Employee gets a `user_id` linked
-by someone holding an Inquiry role, that user is automatically granted the
-Marketer role — since linking a user from this app's context only makes
-sense if they're meant to become one. It's left alone for anyone editing
-Employee without any Inquiry role (e.g. HR staff), so it never surprises an
-unrelated Employee edit.
+**Creating a new Employee who becomes a Marketer** still uses the exact same
+"+ Create a New Employee" quick-create every other Link field in this app
+already has (from the Employee link field on the Marketer doctype itself,
+or from HR). This is why Employee gets full create+write above (a wider
+surface than the select-only design this app started with, chosen
+deliberately to match core ERPNext's own UX). The generic Employee
+quick-create form has no way to also assign a role, though, so
+`auto_assign_marketer_role` (Employee `on_update`, in `utils.py`) fills that
+gap: whenever an Employee gets a `user_id` linked by someone holding an
+Inquiry role, that user is automatically granted the Marketer role — since
+linking a user from this app's context only makes sense if they're meant to
+become one — and `ensure_marketer_record_for_user` gives them their own
+**Marketer** record at the same time (see below), since `Inquiry.marketer`
+links to that, not to Employee/User directly. Both are left alone for
+anyone editing Employee without any Inquiry role (e.g. HR staff), so this
+never surprises an unrelated Employee edit.
 
 The "auto-fill my Marketer record" convenience on a *new* Inquiry (for a
-user who's already a Marketer) still goes through the whitelisted
-`get_my_marketer_employee` rather than a plain `frappe.db.get_list` client
-call — no functional difference now that Employee has full read, but it
-avoids an unnecessary round trip.
+user who's already a Marketer) goes through the whitelisted `get_my_marketer`.
+
+### Marketer doctype, Customer's own default Marketer, and assignment history
+
+**Marketer** is this app's own lightweight master doctype (`marketer_name`,
+optional `user` + `employee` cross-references, `is_disabled`) — replacing
+`Inquiry.marketer`'s old direct link to Employee, and giving **Customer**
+somewhere to record its own default Marketer (a new `marketer` Custom
+Field, `setup_customer_marketer_field` in `install.py`) the way core
+ERPNext's own Sales Team/Sales Person concept would have, without tying it
+to an actual System User — most real-world marketers imported from a
+spreadsheet (see below) are just names, not people who log into this site.
+Core Customer's own `sales_team` table and `default_sales_partner` field
+are hidden (Property Setter, not deleted — existing data and any other
+part of the site relying on them is untouched) in favour of this field.
+
+- **Auto-fill priority on a new Inquiry**
+  (`set_marketer_from_customer_or_user`, `inquiry.py`): (1) leave alone if
+  already set; (2) the selected Customer's own default Marketer, if it has
+  one; (3) the current user's own Marketer record, if they hold the
+  Marketer role. Always changeable afterwards by anyone who can edit the
+  Inquiry.
+- **Every assignment/reassignment is logged**, not just overwritten:
+  `Inquiry.log_marketer_change` appends a row (previous Marketer, new
+  Marketer, changed by, changed on) to the read-only `marketer_history`
+  table every time `marketer` actually changes — including on an
+  already-submitted Inquiry (also called from `before_update_after_submit`,
+  same reasoning as `sync_commercial_status`).
+- **Keeping the Customer in step is opt-in, per change, never silent.**
+  Changing `marketer` on an Inquiry (`inquiry.js`) checks whether that
+  differs from the Customer's own current default and, if so, asks
+  ("Update {Customer}'s default Marketer to {Marketer} as well?") before
+  calling the whitelisted `update_customer_marketer` — an explicit
+  role-check-plus-`ignore_permissions` method (same proven pattern as
+  `assign_commercial_officer`), since generic Customer `write` is deliberately
+  Inquiry Manager only and this needs to work for Marketer/Inquiry Officer too.
+- **Access control still keys off Marketer, correctly.**
+  `enforce_marketer_restriction` and the standing User Permission that
+  backs it up (`sync_marketer_user_permission`, now hooked to
+  `Marketer.on_update` rather than Employee) both compare against the
+  current user's own Marketer record (`Marketer.user`), not an Employee
+  record — a plain Marketer-role user still only ever sees/edits Inquiries
+  where they're the assigned Marketer.
+- **Migrating existing data.** `backfill_convert_inquiry_marketer_to_marketer_doctype`
+  converts every Inquiry that still names an Employee directly (the old
+  shape) into a proper Marketer record (reusing one that already exists
+  for that Employee's linked User) and repoints the Inquiry at it — a
+  one-time field-target migration via raw SQL, deliberately not a real
+  reassignment, so it doesn't log a `marketer_history` entry or prompt
+  anyone about Customer. `backfill_cleanup_stale_employee_marketer_permissions`
+  removes the old Employee-based User Permissions this superseded.
+
+**Importing the firm's existing Marketer assignments.** The firm's own
+`Client Data - 22-07-2026.xlsx` names a Marketer for (almost) every
+Customer; `smart_app/data/Customer_Marketer_2026.csv` is the cleaned
+extract (its `MARKETER` and `RATING` columns were confirmed identical for
+every one of the 433 rows, so only `MARKETER` was kept; `"Hamza Ali khan"`
+was folded into the canonical `"Hamza Ali Khan"`, and placeholder values
+`"Unassigned"`/`"Direct"` were treated as *no* Marketer, not real names —
+8 real Marketers remain). `smart_app.marketer_import.import_marketers`
+creates every one of those 8 (deduplicated, never twice) and sets
+`Customer.marketer` for every Customer whose name matches a row — runs
+once automatically via `smart_app/patches/import_marketers_2026.py`, and
+only ever links *existing* Customers; any sheet name that doesn't match
+one already in the database is reported, never used to create a new
+Customer or silently dropped.
+
+### Status changes are Inquiry Manager only, and always need a reason
+
+Every Inquiry Workflow transition — including ones Inquiry Officer/Marketer
+used to be allowed to make themselves (Send for Quotation, Mark as
+Replied/Lost) — is now **Inquiry Manager only** (`manager_only` in
+`setup_workflow`, `install.py`; the transitions table is fully rebuilt on
+every migrate, not just added to, so narrowing this self-heals a site that
+already had the older, broader rows). Backed up at the field level too:
+`inquiry_status` now sits at **Permission Level 2**, read-only for Inquiry
+Officer/Marketer/Commercial Manager/Officer, read+write for Inquiry
+Manager/System Manager only — so even if a stale client somehow still
+offered a transition to a non-Manager, Frappe's own
+`reset_values_if_no_permlevel_access` would silently revert the change on
+save rather than actually applying it. Keeping the transitions themselves
+Manager-only is what avoids that ever being visible as a confusing
+click-does-nothing button in the first place.
+
+Whenever `inquiry_status` actually changes, a reason is mandatory:
+`status_change_reason` (Small Text) is hidden on the form until edited —
+`inquiry.js`'s own `inquiry_status` field trigger reveals + requires it the
+moment the value changes, including via a Workflow transition button
+(which sets the field the same way a plain edit would, just before saving,
+so the trigger still fires) — and `Inquiry.enforce_status_change_reason`
+backs this up server-side (blank reason → blocked, both on a plain save and
+on an already-submitted Inquiry's `before_update_after_submit` path).
+Confirmed reasons are written to the document's own comment timeline
+(`self.add_comment`), not a single field that the next change would just
+overwrite.
 
 ### Focused sidebar (hiding other workspaces)
 
@@ -772,13 +867,28 @@ Quotation Item**:
   flips `in_list_view` on rather than touching ERPNext's own files.
 - **Pharmacopeia** / **Item Grade** — this site's own `custom_pharmacopeia`
   / `custom_item_grade` fields on Item, which don't exist on any of these
-  child tables at all by default. Added as fetched, read-only **Custom
-  Fields** (`fetch_from: <item link fieldname>.custom_pharmacopeia`, etc.)
-  so they populate automatically and can't drift from the Item master.
+  child tables at all by default. Added as fetched **Custom Fields**
+  (`fetch_from: <item link fieldname>.custom_pharmacopeia`, etc.) so they
+  default from the Item master automatically.
 
 If your site doesn't actually have `custom_pharmacopeia`/`custom_item_grade`
 on Item, these columns will just stay blank rather than error — remove them
 via Customize Form if you don't want them.
+
+**Editable everywhere, but only from Item's own option list.**
+`setup_item_variant_dropdowns` (run right after `setup_item_master_columns`)
+turns these from fetched-and-locked into editable **Select** dropdowns —
+on those same four child tables, plus **Sales Order Item**, **Sales Invoice
+Item**, and **Indent Item** — so a Commercial Officer can correct the
+Pharmacopeia/Grade for one particular deal without it forever tracking
+whatever the Item master says. The dropdown's own options are mirrored
+directly from Item's own `custom_pharmacopeia`/`custom_item_grade` Select
+fields (read via `frappe.get_meta("Item")`, not a hand-typed list) onto
+every one of the seven child tables, via **Property Setter**, self-healing
+on every migrate — so a new Pharmacopeia/Grade is only ever added in one
+place (Item itself, e.g. via Customize Form), and it's available at every
+transaction level on the next migrate, never as a free-text override that
+could drift from what Item actually offers.
 
 **Grid width budget.** A compact grid row only has room for so many columns
 before later ones get pushed off-screen — Frappe doesn't wrap or shrink

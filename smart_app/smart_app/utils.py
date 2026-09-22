@@ -89,16 +89,76 @@ def auto_assign_marketer_role(doc, method=None):
 		user.append("roles", {"role": "Marketer"})
 		user.save(ignore_permissions=True)
 
+	ensure_marketer_record_for_user(doc.user_id, doc.employee_name, doc.name)
+
+
+def ensure_marketer_record_for_user(user, display_name, employee=None):
+	"""Give a User who's just become a Marketer (auto_assign_marketer_role
+	above) their own Marketer master record if they don't already have
+	one -- Inquiry.marketer links to Marketer, not Employee/User directly,
+	so without this a brand-new Marketer would have nothing to be assigned
+	to Inquiries as. Named after the Employee's own name, falling back to
+	appending the User's own name on a collision (two Employees sharing a
+	display name)."""
+	if frappe.db.exists("Marketer", {"user": user}):
+		return
+
+	marketer_name = display_name or user
+	if frappe.db.exists("Marketer", marketer_name):
+		marketer_name = f"{marketer_name} ({user})"
+
+	frappe.get_doc(
+		{
+			"doctype": "Marketer",
+			"marketer_name": marketer_name,
+			"user": user,
+			"employee": employee,
+		}
+	).insert(ignore_permissions=True)
+
 
 def sync_marketer_user_permission(doc, method=None):
-	"""Employee.on_update: keep the Marketer -> Employee User Permission in sync."""
-	sync_marketer_permission_for_employee(doc.name)
+	"""Marketer.on_update: keep a Marketer's own scoped User Permission
+	(restricting them, via Inquiry's `marketer` field, to Inquiries they're
+	actually assigned to -- see enforce_marketer_restriction in inquiry.py
+	for the server-side guard this backs up) in sync with whether the
+	linked User still actually holds the Marketer role. Scoped to the
+	Inquiry doctype only via `applicable_for`, so it never restricts this
+	same User's access elsewhere."""
+	existing = frappe.db.get_value(
+		"User Permission",
+		{"allow": "Marketer", "for_value": doc.name, "applicable_for": APPLICABLE_FOR},
+		["name", "user"],
+		as_dict=True,
+	)
+	should_have_permission = (
+		doc.user and not doc.is_disabled and "Marketer" in frappe.get_roles(doc.user)
+	)
+
+	if should_have_permission:
+		if existing and existing.user == doc.user:
+			return
+		if existing:
+			frappe.delete_doc("User Permission", existing.name, ignore_permissions=True)
+		frappe.get_doc(
+			{
+				"doctype": "User Permission",
+				"user": doc.user,
+				"allow": "Marketer",
+				"for_value": doc.name,
+				"applicable_for": APPLICABLE_FOR,
+				"apply_to_all_doctypes": 0,
+			}
+		).insert(ignore_permissions=True)
+	elif existing:
+		frappe.delete_doc("User Permission", existing.name, ignore_permissions=True)
 
 
 def sync_marketer_user_permission_for_user(doc, method=None):
-	"""User.on_update: role changes may add/remove the Marketer role."""
-	for employee in frappe.get_all("Employee", filters={"user_id": doc.name}, pluck="name"):
-		sync_marketer_permission_for_employee(employee)
+	"""User.on_update: role changes may add/remove the Marketer role --
+	re-sync every Marketer record linked to this User to match."""
+	for marketer in frappe.get_all("Marketer", filters={"user": doc.name}, pluck="name"):
+		sync_marketer_user_permission(frappe.get_doc("Marketer", marketer))
 
 
 COMMERCIAL_STATUS_ORDER = ["Unassigned", "Assigned", "Quotation Created", "RFQ Created", "RFQ Sent"]
@@ -366,53 +426,6 @@ def sync_item_prices_from_supplier_quotation(doc, method=None):
 	price_list = ensure_default_price_list("Supplier", doc.supplier, supplier_name or doc.supplier)
 	for row in doc.get("items") or []:
 		_upsert_item_price(row.item_code, price_list, row.rate)
-
-
-def sync_marketer_permission_for_employee(employee_name):
-	"""Ensure a Marketer only ever sees/edits Inquiries where they are the
-	assigned Marketer. This is done with a standard Frappe User Permission,
-	scoped to the Inquiry doctype only via `applicable_for`, so it never
-	restricts the same user's access to Employee/HR records elsewhere."""
-	employee = frappe.db.get_value(
-		"Employee", employee_name, ["user_id", "status"], as_dict=True
-	)
-	if not employee:
-		return
-
-	existing = frappe.db.get_value(
-		"User Permission",
-		{
-			"allow": "Employee",
-			"for_value": employee_name,
-			"applicable_for": APPLICABLE_FOR,
-		},
-		["name", "user"],
-		as_dict=True,
-	)
-
-	should_have_permission = (
-		employee.user_id
-		and employee.status == "Active"
-		and "Marketer" in frappe.get_roles(employee.user_id)
-	)
-
-	if should_have_permission:
-		if existing and existing.user == employee.user_id:
-			return
-		if existing:
-			frappe.delete_doc("User Permission", existing.name, ignore_permissions=True)
-		frappe.get_doc(
-			{
-				"doctype": "User Permission",
-				"user": employee.user_id,
-				"allow": "Employee",
-				"for_value": employee_name,
-				"applicable_for": APPLICABLE_FOR,
-				"apply_to_all_doctypes": 0,
-			}
-		).insert(ignore_permissions=True)
-	elif existing:
-		frappe.delete_doc("User Permission", existing.name, ignore_permissions=True)
 
 
 # ---------------------------------------------------------------------------

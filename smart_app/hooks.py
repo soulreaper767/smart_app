@@ -53,6 +53,10 @@ doc_events = {
 	"Employee": {
 		"on_update": [
 			"smart_app.smart_app.utils.auto_assign_marketer_role",
+		],
+	},
+	"Marketer": {
+		"on_update": [
 			"smart_app.smart_app.utils.sync_marketer_user_permission",
 		],
 	},

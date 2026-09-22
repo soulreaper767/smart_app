@@ -23,7 +23,7 @@ frappe.ui.form.on("Inquiry", {
 	onload: function (frm) {
 		if (frm.is_new() && !frm.doc.marketer && frappe.user_roles.includes("Marketer")) {
 			frappe.call({
-				method: "smart_app.smart_app.doctype.inquiry.inquiry.get_my_marketer_employee",
+				method: "smart_app.smart_app.doctype.inquiry.inquiry.get_my_marketer",
 				callback: function (r) {
 					if (r.message) {
 						frm.set_value("marketer", r.message);
@@ -46,6 +46,13 @@ frappe.ui.form.on("Inquiry", {
 		frm.trigger("show_assign_button");
 		frm.trigger("show_submit_button");
 		frm.trigger("show_create_quotation_button");
+
+		// status_change_reason only ever makes sense for the *next* edit --
+		// a freshly loaded/saved doc has nothing pending, so start hidden
+		// and non-mandatory again every time (see the inquiry_status
+		// trigger below, which is what actually reveals it).
+		frm.set_df_property("status_change_reason", "hidden", 1);
+		frm.set_df_property("status_change_reason", "reqd", 0);
 	},
 
 	show_assign_button: function (frm) {
@@ -181,11 +188,51 @@ frappe.ui.form.on("Inquiry", {
 			method: "smart_app.smart_app.doctype.inquiry.inquiry.get_customer_contact_details",
 			args: { customer: frm.doc.inquiry_source },
 			callback: function (r) {
-				if (r.message) {
-					Object.keys(r.message).forEach((key) => frm.set_value(key, r.message[key]));
+				if (!r.message) return;
+				// marketer is handled separately from the rest -- only set
+				// it when this Customer actually has a default (a blank
+				// result means "no default on file", not "clear whatever
+				// Marketer is already on this Inquiry").
+				const { marketer, ...rest } = r.message;
+				Object.keys(rest).forEach((key) => frm.set_value(key, rest[key]));
+				if (marketer) {
+					frm.set_value("marketer", marketer);
 				}
 			},
 		});
+	},
+
+	marketer: function (frm) {
+		// Keeping the Customer's own default Marketer in step is opt-in,
+		// per change, never automatic -- see update_customer_marketer
+		// (inquiry.py). Every change is logged regardless (marketer_history,
+		// Inquiry.log_marketer_change), independent of this prompt.
+		if (!frm.doc.marketer || !frm.doc.inquiry_source) return;
+
+		frappe.db.get_value("Customer", frm.doc.inquiry_source, "marketer").then((r) => {
+			const current = r.message && r.message.marketer;
+			if (current === frm.doc.marketer) return;
+			frappe.confirm(
+				__("Update {0}'s default Marketer to {1} as well?", [frm.doc.customer_name || frm.doc.inquiry_source, frm.doc.marketer]),
+				function () {
+					frappe.call({
+						method: "smart_app.smart_app.doctype.inquiry.inquiry.update_customer_marketer",
+						args: { customer: frm.doc.inquiry_source, marketer: frm.doc.marketer },
+					});
+				}
+			);
+		});
+	},
+
+	inquiry_status: function (frm) {
+		// Reveal + require the reason the moment Status is actually edited
+		// (including via a Workflow transition button, which sets this
+		// field's value the same way a plain field edit would before
+		// saving) -- see enforce_status_change_reason (inquiry.py) for the
+		// server-side backstop, and refresh above for why this resets.
+		frm.set_df_property("status_change_reason", "hidden", 0);
+		frm.set_df_property("status_change_reason", "reqd", 1);
+		frm.scroll_to_field("status_change_reason");
 	},
 
 	is_for_referred_party: function (frm) {
