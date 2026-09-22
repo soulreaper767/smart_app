@@ -1,0 +1,374 @@
+{
+ "actions": [],
+ "autoname": "naming_series:",
+ "creation": "2026-09-23 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "is_submittable": 1,
+ "field_order": [
+  "naming_series",
+  "posting_date",
+  "commission_status",
+  "column_break_header",
+  "company",
+  "currency",
+  "amended_from",
+  "section_break_source",
+  "indent",
+  "indent_date",
+  "indent_value",
+  "column_break_source",
+  "supplier",
+  "supplier_name",
+  "buyer",
+  "buyer_name",
+  "billing_customer",
+  "section_break_components",
+  "components",
+  "gross_commission",
+  "section_break_discount",
+  "discount_type",
+  "discount_percentage",
+  "column_break_discount",
+  "discount_amount",
+  "net_commission",
+  "section_break_terms",
+  "payment_due_hours",
+  "swift_copy_received_on",
+  "column_break_terms",
+  "due_date",
+  "section_break_financials",
+  "sales_invoice",
+  "outstanding_amount",
+  "column_break_financials",
+  "write_off_reason",
+  "section_break_notes",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "no_copy": 1,
+   "options": "COMM-.YYYY.-.MM.-.####.",
+   "print_hide": 1,
+   "reqd": 1
+  },
+  {
+   "default": "Today",
+   "fieldname": "posting_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Date",
+   "reqd": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "depends_on": "eval:doc.docstatus === 1",
+   "fieldname": "commission_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "\nSubmitted\nReceived\nWritten Off",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_header",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Commission Invoice",
+   "print_hide": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_source",
+   "fieldtype": "Section Break",
+   "label": "Source"
+  },
+  {
+   "description": "Set once, via \"Get Items From > Indent\" -- the only supported way to populate this Commission Invoice.",
+   "fieldname": "indent",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Indent",
+   "options": "Indent",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fetch_from": "indent.indent_date",
+   "fieldname": "indent_date",
+   "fieldtype": "Date",
+   "label": "Indent Date",
+   "read_only": 1
+  },
+  {
+   "description": "The full value of the underlying trade -- for reference, and as the base for a \"Percentage of Indent Value\" commission component. Never itself billed or recognised as revenue.",
+   "fetch_from": "indent.total_amount",
+   "fieldname": "indent_value",
+   "fieldtype": "Currency",
+   "label": "Indent Value",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_source",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Who actually owes this commission -- the Supplier who fulfilled the Indent, out of the proceeds they received from the Buyer.",
+   "fetch_from": "indent.supplier",
+   "fieldname": "supplier",
+   "fieldtype": "Link",
+   "label": "Supplier (Commission Payer)",
+   "options": "Supplier",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "indent.supplier_name",
+   "fieldname": "supplier_name",
+   "fieldtype": "Data",
+   "label": "Supplier Name",
+   "read_only": 1
+  },
+  {
+   "description": "The Buyer on the underlying Indent -- reference only, never billed for this.",
+   "fetch_from": "indent.customer",
+   "fieldname": "buyer",
+   "fieldtype": "Link",
+   "label": "Buyer",
+   "options": "Customer",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "indent.customer_name",
+   "fieldname": "buyer_name",
+   "fieldtype": "Data",
+   "label": "Buyer Name",
+   "read_only": 1
+  },
+  {
+   "description": "The Customer record this commission is actually billed against -- a stand-in for the Supplier above, since a Sales Invoice always bills a Customer. Auto-created/reused (ensure_customer_for_supplier, utils.py); never a real customer of this business.",
+   "fieldname": "billing_customer",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Billing Customer",
+   "options": "Customer",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_components",
+   "fieldtype": "Section Break",
+   "label": "Commission Calculation"
+  },
+  {
+   "description": "Mix and match as many of these as needed -- a percentage of the Indent's own value, a rate per unit of a specific item, and/or a flat fixed amount -- all added together below.",
+   "fieldname": "components",
+   "fieldtype": "Table",
+   "label": "Commission Components",
+   "options": "Commission Invoice Component",
+   "reqd": 1
+  },
+  {
+   "bold": 1,
+   "fieldname": "gross_commission",
+   "fieldtype": "Currency",
+   "label": "Gross Commission",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "collapsible_depends_on": "eval:doc.discount_type",
+   "fieldname": "section_break_discount",
+   "fieldtype": "Section Break",
+   "label": "Discount"
+  },
+  {
+   "fieldname": "discount_type",
+   "fieldtype": "Select",
+   "label": "Discount Type",
+   "options": "\nPercentage\nFixed Amount"
+  },
+  {
+   "depends_on": "eval:doc.discount_type == \"Percentage\"",
+   "fieldname": "discount_percentage",
+   "fieldtype": "Percent",
+   "label": "Discount Percentage"
+  },
+  {
+   "fieldname": "column_break_discount",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.discount_type",
+   "description": "Computed automatically when Discount Type is Percentage; enter directly when Fixed Amount.",
+   "fieldname": "discount_amount",
+   "fieldtype": "Currency",
+   "label": "Discount Amount",
+   "options": "currency",
+   "read_only_depends_on": "eval:doc.discount_type == \"Percentage\""
+  },
+  {
+   "bold": 1,
+   "fieldname": "net_commission",
+   "fieldtype": "Currency",
+   "label": "Net Commission (Invoiced Amount)",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_terms",
+   "fieldtype": "Section Break",
+   "label": "Commission Payment Terms"
+  },
+  {
+   "default": "48",
+   "description": "Per the Supplier agreement: commission is due this many hours after the Buyer's payment (SWIFT copy) is received.",
+   "fieldname": "payment_due_hours",
+   "fieldtype": "Int",
+   "label": "Payment Due (Hours After SWIFT Copy)"
+  },
+  {
+   "description": "When the Buyer's proof of payment to the Supplier (SWIFT copy) was received and forwarded to the Supplier as the trigger for our own commission payment.",
+   "fieldname": "swift_copy_received_on",
+   "fieldtype": "Datetime",
+   "label": "SWIFT Copy Received On"
+  },
+  {
+   "fieldname": "column_break_terms",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Computed from \"SWIFT Copy Received On\" + the hours above -- also set as the underlying Sales Invoice's own due date.",
+   "fieldname": "due_date",
+   "fieldtype": "Date",
+   "label": "Commission Due Date",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_financials",
+   "fieldtype": "Section Break",
+   "label": "Financials"
+  },
+  {
+   "description": "Created and submitted automatically for the Net Commission amount, billed to the Billing Customer above -- this is what actually posts to the ledger; the Indent's own trade value never does.",
+   "fieldname": "sales_invoice",
+   "fieldtype": "Link",
+   "label": "Sales Invoice",
+   "options": "Sales Invoice",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "sales_invoice.outstanding_amount",
+   "fieldname": "outstanding_amount",
+   "fieldtype": "Currency",
+   "label": "Outstanding",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_financials",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.commission_status == \"Written Off\"",
+   "fieldname": "write_off_reason",
+   "fieldtype": "Small Text",
+   "label": "Write-Off Reason",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_notes",
+   "fieldtype": "Section Break",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Text",
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "module": "Smart App",
+ "name": "Commission Invoice",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Commercial Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "amend": 1,
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Commercial Officer",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "search_fields": "indent,supplier_name,commission_status",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "supplier_name",
+ "track_changes": 1
+}

@@ -33,6 +33,7 @@ COMMERCIAL_CARD_NAMES = [
 	"Assigned Inquiries",
 	"Total Suppliers",
 	"Open Indents",
+	"Outstanding Commission",
 ]
 
 # Commercial-side Dashboard Charts (not Inquiry-based, so built separately from
@@ -186,9 +187,22 @@ COMMERCIAL_SHORTCUTS = [
 	},
 	{"label": "Indents", "type": "DocType", "link_to": "Indent", "doc_view": "List", "color": "#A855F7"},
 	{
+		"label": "Commission Invoices",
+		"type": "DocType",
+		"link_to": "Commission Invoice",
+		"doc_view": "List",
+		"color": "#EAB308",
+	},
+	{
 		"label": "Indent Register",
 		"type": "Report",
 		"link_to": "Indent Register",
+		"color": "#F97316",
+	},
+	{
+		"label": "Commission Register",
+		"type": "Report",
+		"link_to": "Commission Register",
 		"color": "#F97316",
 	},
 	{
@@ -229,6 +243,7 @@ def setup():
 	run_step(setup_indent_masters, "indent trade term master data")
 	run_step(setup_supplier_bank_fields, "supplier bank detail fields (for Indent)")
 	run_step(setup_customer_marketer_field, "customer marketer field")
+	run_step(setup_commission_billing_field, "commission billing field (customer represents supplier)")
 	run_step(setup_workflow, "workflow")
 	run_step(setup_kanban_board, "kanban board")
 	run_step(setup_dashboard_charts, "dashboard charts")
@@ -412,9 +427,15 @@ def grant_commercial_access():
 		# Commercial Officer generates these; Commercial Manager gets the
 		# same access for oversight (reassigning, reviewing, following up).
 		# Sales Order / Sales Invoice are the parallel direct-sale pipeline
-		# (Inquiry -> Sales Order -> Sales Invoice -> Indent) this same team
-		# runs alongside the buying side.
-		for doctype in ("Quotation", "Request for Quotation", "Sales Order", "Sales Invoice"):
+		# (Inquiry -> Quotation -> Sales Order -> Sales Invoice) this same
+		# team runs alongside the buying side (paperwork only -- see the
+		# module docstring above setup_sales_pipeline_integration for why
+		# this app's own revenue never comes from here). Payment Entry is
+		# for Commission Invoice's own "Create > Payment"/"Write Off"
+		# actions -- the automatic ones run with ignore_permissions=True,
+		# but a Commercial Officer/Manager finishing one by hand (or
+		# recording any other payment) needs real create/write here.
+		for doctype in ("Quotation", "Request for Quotation", "Sales Order", "Sales Invoice", "Payment Entry"):
 			_grant_custom_docperm(
 				doctype, role, select=1, read=1, write=1, create=1, submit=1, print=1, email=1,
 				report=1, export=1,
@@ -902,6 +923,20 @@ def setup_commercial_overview():
 			[["Indent", "docstatus", "=", 1], ["Indent", "indent_status", "!=", "Closed"]],
 			document_type="Indent",
 		)
+	# Total commission still uncollected across every submitted, not-yet-
+	# Received/Written-Off Commission Invoice -- this app's own real
+	# revenue still outstanding, at a glance.
+	if frappe.db.exists("DocType", "Commission Invoice"):
+		_create_number_card(
+			"Outstanding Commission",
+			"Sum",
+			[
+				["Commission Invoice", "docstatus", "=", 1],
+				["Commission Invoice", "commission_status", "not in", ["Received", "Written Off"]],
+			],
+			aggregate_function_based_on="outstanding_amount",
+			document_type="Commission Invoice",
+		)
 
 	# Only submitted Inquiries belong on this board -- otherwise every draft
 	# (still "Unassigned" by default before it's even handed to Commercial)
@@ -1036,6 +1071,29 @@ def setup_reports():
 		ref_doctype="Indent",
 	)
 
+	_create_query_report(
+		"Commission Register",
+		"""
+		select
+			ci.name as "Commission Invoice:Link/Commission Invoice:150",
+			ci.posting_date as "Date:Date:100",
+			ci.indent as "Indent:Link/Indent:130",
+			ci.supplier_name as "Supplier:Data:180",
+			ci.currency as "Currency:Link/Currency:90",
+			ci.gross_commission as "Gross:Currency/currency:110",
+			ci.discount_amount as "Discount:Currency/currency:100",
+			ci.net_commission as "Net Commission:Currency/currency:120",
+			ci.outstanding_amount as "Outstanding:Currency/currency:120",
+			ci.due_date as "Due Date:Date:100",
+			ci.commission_status as "Status:Data:110"
+		from `tabCommission Invoice` ci
+		where ci.docstatus != 2
+		order by ci.posting_date desc
+		""".strip(),
+		roles=("Commercial Manager", "Commercial Officer", "System Manager"),
+		ref_doctype="Commission Invoice",
+	)
+
 
 def _create_query_report(
 	name,
@@ -1128,6 +1186,26 @@ frappe.ui.form.on("Quotation", {
 					},
 				});
 			});
+		}
+
+		// Indent is deliberately sourced from Quotation, not Sales Order/
+		// Sales Invoice -- this app's revenue is the commission on the
+		// Indent (see Commission Invoice), never the trade's own full
+		// value, so Indent doesn't wait on whatever happens downstream.
+		if (frm.doc.docstatus === 1 && frappe.model.can_create("Indent")) {
+			frm.add_custom_button(__("Indent"), function () {
+				frappe.call({
+					method: "smart_app.smart_app.doctype.indent.indent.create_indent_from_quotation",
+					args: { quotation_name: frm.doc.name },
+					freeze: true,
+					freeze_message: __("Preparing Indent..."),
+					callback: function (r) {
+						if (r.message) {
+							frappe.set_route("Form", "Indent", r.message);
+						}
+					},
+				});
+			}, __("Create"));
 		}
 	},
 });
@@ -1273,53 +1351,26 @@ def setup_quotation_integration():
 
 # ---------------------------------------------------------------------------
 # The parallel direct-sale pipeline: Inquiry -> Quotation -> Sales Order ->
-# Sales Invoice -> Indent, run by the same Commercial team alongside the
-# Quotation -> RFQ -> Supplier Quotation buying pipeline above (both start
-# from the same Quotation -- this isn't a fork of the Inquiry, it's a fork
-# of what happens *after* a Quotation exists).
+# Sales Invoice, run by the same Commercial team alongside the Quotation ->
+# RFQ -> Supplier Quotation buying pipeline above (both start from the same
+# Quotation -- this isn't a fork of the Inquiry, it's a fork of what happens
+# *after* a Quotation exists). Purely optional paperwork/documentation for
+# the trade itself -- this app's own revenue is the commission on the
+# Indent (see Commission Invoice), never this pipeline's own full trade
+# value, which is exactly why Indent is sourced from Quotation directly
+# (setup_quotation_integration's own "Create > Indent" button), not from
+# here -- Indent never waits on, or depends on, whether a Sales Order/Sales
+# Invoice for the full trade value even exists.
 #
-# Sales Order is deliberately built from Quotation, not Inquiry directly --
-# core ERPNext already provides this completely natively, both directions
-# (Quotation's own "Create > Sales Order" button, and the reverse "Get Items
-# From > Quotation" on a blank Sales Order, both calling erpnext.selling.
-# doctype.quotation.quotation.make_sales_order) -- so there's nothing to
-# customise here at all, only the permission grant (grant_commercial_access)
-# for a Commercial Officer/Manager to use either one. Sales Order -> Sales
-# Invoice is equally native. Only the "Create > Indent" button once a Sales
-# Invoice is submitted is this app's own.
+# Sales Order is built from Quotation, not Inquiry directly -- core ERPNext
+# already provides this completely natively, both directions (Quotation's
+# own "Create > Sales Order" button, and the reverse "Get Items From >
+# Quotation" on a blank Sales Order, both calling erpnext.selling.doctype.
+# quotation.quotation.make_sales_order) -- so there's nothing to customise
+# here at all, only the permission grant (grant_commercial_access) for a
+# Commercial Officer/Manager to use either one. Sales Order -> Sales Invoice
+# is equally native.
 # ---------------------------------------------------------------------------
-
-# create_indent_from_sales_invoice (indent.py) builds a draft Indent with
-# every item carried over -- a Commercial Officer still has to pick which
-# Supplier is actually fulfilling the shipment (which fetches its bank
-# details, see setup_supplier_bank_fields) and fill in the trade-terms grid,
-# so this deliberately doesn't try to do more than hand off the item list.
-SALES_INVOICE_CLIENT_SCRIPT_JS = """
-frappe.ui.form.on("Sales Invoice", {
-	refresh: function (frm) {
-		if (
-			frm.doc.docstatus === 1 &&
-			frm.doc.items &&
-			frm.doc.items.length &&
-			frappe.model.can_create("Indent")
-		) {
-			frm.add_custom_button(__("Indent"), function () {
-				frappe.call({
-					method: "smart_app.smart_app.doctype.indent.indent.create_indent_from_sales_invoice",
-					args: { sales_invoice_name: frm.doc.name },
-					freeze: true,
-					freeze_message: __("Preparing Indent..."),
-					callback: function (r) {
-						if (r.message) {
-							frappe.set_route("Form", "Indent", r.message);
-						}
-					},
-				});
-			}, __("Create"));
-		}
-	},
-});
-""".strip()
 
 
 def setup_sales_pipeline_integration():
@@ -1353,9 +1404,15 @@ def setup_sales_pipeline_integration():
 		# Field over on its own.
 		_add_custom_field("Sales Invoice", "inquiry", "Inquiry", "Inquiry", insert_after="customer")
 		_set_property_setter("Sales Invoice", "inquiry", "hidden", "1", "Check")
-		_upsert_client_script(
-			"Inquiry - Commercial Pipeline (Sales Invoice)", "Sales Invoice", SALES_INVOICE_CLIENT_SCRIPT_JS
-		)
+		# Self-healing cleanup: an earlier version of this app built Indent
+		# from a submitted Sales Invoice (its own "Create > Indent" Client
+		# Script) instead of from Quotation. Remove that script from any
+		# site that already migrated with it, so a stale button doesn't
+		# linger on Sales Invoice.
+		if frappe.db.exists("Client Script", "Inquiry - Commercial Pipeline (Sales Invoice)"):
+			frappe.delete_doc(
+				"Client Script", "Inquiry - Commercial Pipeline (Sales Invoice)", ignore_permissions=True
+			)
 
 
 def _add_custom_field(dt, fieldname, label, options, insert_after, fieldtype="Link"):
@@ -1707,55 +1764,159 @@ def setup_customer_marketer_field():
 
 
 # ---------------------------------------------------------------------------
+# Commission Invoice's own billing-proxy: a Supplier is who actually owes
+# commission (see Commission Invoice), but core ERPNext's Sales Invoice
+# always bills a Customer, never a Supplier directly. `represents_supplier`
+# marks the Customer record ensure_customer_for_supplier (utils.py)
+# auto-creates/reuses to stand in for one -- hidden, never a real customer
+# of this business, just a lookup key back to the Supplier it represents.
+# ---------------------------------------------------------------------------
+
+
+def setup_commission_billing_field():
+	if not frappe.db.exists("DocType", "Customer"):
+		return
+	_add_custom_field(
+		"Customer", "represents_supplier", "Represents Supplier (Commission Billing)", "Supplier",
+		insert_after="customer_name",
+	)
+	_set_property_setter("Customer", "represents_supplier", "hidden", "1", "Check")
+
+
+# ---------------------------------------------------------------------------
 # Print Format
 # ---------------------------------------------------------------------------
 
 
 def setup_print_format():
-	html = """
-<div class="print-format">
-	<h2>{{ doc.name }}</h2>
-	<table class="table table-bordered" style="width: 100%">
-		<tr>
-			<td style="width: 25%"><b>Date</b></td><td style="width: 25%">{{ frappe.utils.formatdate(doc.inquiry_date) }}</td>
-			<td style="width: 25%"><b>Status</b></td><td style="width: 25%">{{ doc.inquiry_status }}</td>
-		</tr>
-		<tr>
-			<td><b>Customer</b></td><td>{{ doc.customer_name or "" }}</td>
-			<td><b>Category</b></td><td>{{ doc.category or "" }}</td>
-		</tr>
-		<tr>
-			<td><b>Mode of Shipment</b></td><td>{{ doc.shipment_mode or "" }}</td>
-			<td><b>Mode of Payment</b></td><td>{{ doc.payment_mode or "" }}</td>
-		</tr>
-		<tr>
-			<td><b>Incoterm</b></td><td>{{ doc.incoterm or "" }}</td>
-			<td><b>Commercial Officer</b></td><td>{{ doc.commercial_officer or "" }}</td>
-		</tr>
-		<tr>
-			<td><b>Commercial Status</b></td><td>{{ doc.commercial_status or "" }}</td>
-			<td></td><td></td>
-		</tr>
-	</table>
-	<h4>Items</h4>
-	<table class="table table-bordered" style="width: 100%">
-		<thead>
-			<tr><th style="width: 10%">#</th><th>Item</th><th style="width: 20%">Quantity</th></tr>
-		</thead>
-		<tbody>
-			{% for row in doc.items %}
-			<tr>
-				<td>{{ row.idx }}</td>
-				<td>{{ row.item_name or row.item }}</td>
-				<td>{{ row.qty }}</td>
-			</tr>
-			{% endfor %}
-		</tbody>
-	</table>
-	{% if doc.notes %}
-	<h4>Notes</h4>
-	<p>{{ doc.notes }}</p>
+	html = r"""
+<div class="inquiry-print">
+<style>
+	/* Same corporate design system as Indent Standard (one accent colour,
+	one border/type scale), sized to fit one A4 page. */
+	@page { size: A4; margin: 8mm 9mm; }
+
+	.inquiry-print {
+		font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+		font-size: 8.3px;
+		line-height: 1.3;
+		color: #1e293b;
+	}
+	.inquiry-print b, .inquiry-print strong { color: #0f172a; }
+
+	.inquiry-print .doc-title {
+		text-align: center;
+		font-size: 14px;
+		font-weight: 700;
+		letter-spacing: 2px;
+		color: #0f172a;
+		margin: 0 0 6px;
+		padding-bottom: 4px;
+		border-bottom: 1.5px solid #0f6e51;
+	}
+
+	.inquiry-print table {
+		border-collapse: collapse;
+		width: 100%;
+		margin-bottom: 4px;
+	}
+	.inquiry-print th, .inquiry-print td {
+		border: 1px solid #d4dae2;
+		padding: 2px 4px;
+		vertical-align: top;
+	}
+
+	.inquiry-print .section-head {
+		background: #0f6e51;
+		color: #ffffff;
+		font-size: 7.5px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.6px;
+		padding: 2px 4px;
+		border: 1px solid #0f6e51;
+	}
+	.inquiry-print .label-cell {
+		font-weight: 600;
+		width: 20%;
+		background: #f8fafb;
+		color: #55606e;
+		font-size: 7px;
+		text-transform: uppercase;
+		letter-spacing: 0.3px;
+	}
+
+	.inquiry-print .items-table th {
+		background: #f8fafb;
+		color: #55606e;
+		font-size: 7px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.3px;
+		text-align: left;
+	}
+	.inquiry-print .items-table td.num, .inquiry-print .items-table th.num { text-align: right; }
+
+	.inquiry-print .notes { font-size: 7.5px; color: #334155; }
+	.inquiry-print .notes .heading {
+		display: block;
+		font-size: 7.3px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.3px;
+		color: #0f6e51;
+		margin-bottom: 2px;
+	}
+</style>
+
+<div class="doc-title">Inquiry</div>
+
+<table>
+	<tr>
+		<td class="label-cell">Inquiry No</td><td><b>{{ doc.name }}</b></td>
+		<td class="label-cell">Date</td><td>{{ frappe.utils.formatdate(doc.inquiry_date) }}</td>
+		<td class="label-cell">Status</td><td>{{ doc.inquiry_status }}</td>
+	</tr>
+	<tr>
+		<td class="label-cell">Customer</td><td>{{ doc.customer_name or "" }}</td>
+		<td class="label-cell">Category</td><td>{{ doc.category or "" }}</td>
+		<td class="label-cell">Marketer</td><td>{{ doc.marketer or "" }}</td>
+	</tr>
+	<tr>
+		<td class="label-cell">Mode of Shipment</td><td>{{ doc.shipment_mode or "" }}</td>
+		<td class="label-cell">Mode of Payment</td><td>{{ doc.payment_mode or "" }}</td>
+		<td class="label-cell">Incoterm</td><td>{{ doc.incoterm or "" }}</td>
+	</tr>
+	{% if doc.docstatus == 1 %}
+	<tr>
+		<td class="label-cell">Commercial Officer</td><td>{{ doc.commercial_officer or "" }}</td>
+		<td class="label-cell">Commercial Status</td><td colspan="3">{{ doc.commercial_status or "" }}</td>
+	</tr>
 	{% endif %}
+</table>
+
+<table class="items-table">
+	<tr><td class="section-head" colspan="3">Items</td></tr>
+	<tr>
+		<th style="width: 10%">#</th>
+		<th>Item</th>
+		<th class="num" style="width: 20%">Quantity</th>
+	</tr>
+	{% for row in doc.items %}
+	<tr>
+		<td>{{ row.idx }}</td>
+		<td>{{ row.item_name or row.item }}</td>
+		<td class="num">{{ row.qty }}</td>
+	</tr>
+	{% endfor %}
+</table>
+
+{% if doc.notes %}
+<div class="notes">
+	<span class="heading">Notes</span>
+	{{ doc.notes }}
+</div>
+{% endif %}
 </div>
 """.strip()
 
@@ -1812,33 +1973,39 @@ def setup_indent_print_format():
 	html = r"""
 <div class="indent-print">
 <style>
+	/* Compact by design -- every main print format in this app is meant to
+	fit one A4 page: small type, tight row padding, low margins throughout,
+	while keeping the same corporate design system (one accent colour, a
+	clear type scale, bold used only where it earns its place). */
+	@page { size: A4; margin: 8mm 9mm; }
+
 	.indent-print {
 		font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-		font-size: 10.5px;
-		line-height: 1.55;
+		font-size: 8.3px;
+		line-height: 1.3;
 		color: #1e293b;
 	}
 	.indent-print b, .indent-print strong { color: #0f172a; }
 
 	.indent-print .doc-title {
 		text-align: center;
-		font-size: 21px;
+		font-size: 14px;
 		font-weight: 700;
-		letter-spacing: 4px;
+		letter-spacing: 2px;
 		color: #0f172a;
-		margin: 0 0 16px;
-		padding-bottom: 10px;
-		border-bottom: 2.5px solid #0f6e51;
+		margin: 0 0 6px;
+		padding-bottom: 4px;
+		border-bottom: 1.5px solid #0f6e51;
 	}
 
 	.indent-print table {
 		border-collapse: collapse;
 		width: 100%;
-		margin-bottom: 12px;
+		margin-bottom: 4px;
 	}
 	.indent-print th, .indent-print td {
 		border: 1px solid #d4dae2;
-		padding: 6px 9px;
+		padding: 2px 4px;
 		vertical-align: top;
 	}
 
@@ -1846,11 +2013,11 @@ def setup_indent_print_format():
 	.indent-print .section-head {
 		background: #0f6e51;
 		color: #ffffff;
-		font-size: 9.5px;
+		font-size: 7.5px;
 		font-weight: 700;
 		text-transform: uppercase;
-		letter-spacing: 1px;
-		padding: 5px 9px;
+		letter-spacing: 0.6px;
+		padding: 2px 4px;
 		border: 1px solid #0f6e51;
 	}
 
@@ -1859,68 +2026,68 @@ def setup_indent_print_format():
 		width: 22%;
 		background: #f8fafb;
 		color: #55606e;
-		font-size: 9px;
+		font-size: 7px;
 		text-transform: uppercase;
-		letter-spacing: 0.5px;
+		letter-spacing: 0.3px;
 	}
-	.indent-print .party-name { font-size: 11.5px; font-weight: 700; }
+	.indent-print .party-name { font-size: 9px; font-weight: 700; }
 	.indent-print .party-address { color: #475569; }
 
 	.indent-print .items-table th {
 		background: #f8fafb;
 		color: #55606e;
-		font-size: 9px;
+		font-size: 7px;
 		font-weight: 700;
 		text-transform: uppercase;
-		letter-spacing: 0.5px;
+		letter-spacing: 0.3px;
 		text-align: left;
 	}
 	.indent-print .items-table td.num, .indent-print .items-table th.num { text-align: right; }
-	.indent-print .items-table .item-desc { color: #64748b; font-size: 9.7px; font-style: italic; }
+	.indent-print .items-table .item-desc { color: #64748b; font-size: 7.5px; font-style: italic; }
 	.indent-print .total-row td {
-		border-top: 1.5px solid #0f6e51;
+		border-top: 1.2px solid #0f6e51;
 		background: #f4faf7;
 		font-weight: 700;
-		font-size: 11px;
+		font-size: 8.8px;
 	}
 
 	.indent-print .clause-label {
 		text-align: center;
 		font-weight: 700;
-		font-size: 9.5px;
+		font-size: 7.3px;
 		text-transform: uppercase;
-		letter-spacing: 0.5px;
+		letter-spacing: 0.3px;
 		color: #0f6e51;
 		background: #f4faf7;
 		width: 13%;
 	}
-	.indent-print .clause-text { font-size: 9.8px; line-height: 1.65; }
-	.indent-print .clause-text + .clause-text { margin-top: 6px; }
+	.indent-print .clause-text { font-size: 7.5px; line-height: 1.35; }
+	.indent-print .clause-text + .clause-text { margin-top: 2px; }
 	.indent-print .shipping-marks { text-align: center; }
 
 	.indent-print .signature-row td {
 		border: none;
-		padding-top: 34px;
+		padding-top: 14px;
 	}
 	.indent-print .signature-row .signature-line {
 		border-top: 1px solid #0f172a;
-		padding-top: 6px;
+		padding-top: 3px;
 		font-weight: 600;
-		font-size: 9px;
+		font-size: 7px;
 		text-transform: uppercase;
-		letter-spacing: 0.5px;
+		letter-spacing: 0.3px;
 		color: #334155;
 	}
 
-	.indent-print .terms-note { font-size: 9.8px; color: #334155; }
+	.indent-print .terms-note { font-size: 7.5px; color: #334155; }
 	.indent-print .terms-note .heading {
 		display: block;
-		font-size: 9.5px;
+		font-size: 7.3px;
 		font-weight: 700;
 		text-transform: uppercase;
-		letter-spacing: 0.5px;
+		letter-spacing: 0.3px;
 		color: #0f6e51;
-		margin-bottom: 3px;
+		margin-bottom: 2px;
 	}
 </style>
 
@@ -2134,6 +2301,7 @@ LINK_CARDS = [
 			{"label": "Sales Order", "link_type": "DocType", "link_to": "Sales Order"},
 			{"label": "Sales Invoice", "link_type": "DocType", "link_to": "Sales Invoice"},
 			{"label": "Indent", "link_type": "DocType", "link_to": "Indent"},
+			{"label": "Commission Invoice", "link_type": "DocType", "link_to": "Commission Invoice"},
 		],
 	},
 	{

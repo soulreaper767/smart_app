@@ -1,0 +1,103 @@
+{
+ "actions": [],
+ "creation": "2026-09-23 00:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "component_type",
+  "description",
+  "percentage",
+  "item_code",
+  "qty",
+  "rate",
+  "fixed_amount",
+  "amount"
+ ],
+ "fields": [
+  {
+   "columns": 2,
+   "fieldname": "component_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Type",
+   "options": "Percentage of Indent Value\nRate per UOM\nFixed Amount",
+   "reqd": 1
+  },
+  {
+   "columns": 2,
+   "fieldname": "description",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Description"
+  },
+  {
+   "columns": 1,
+   "depends_on": "eval:doc.component_type == \"Percentage of Indent Value\"",
+   "fieldname": "percentage",
+   "fieldtype": "Percent",
+   "in_list_view": 1,
+   "label": "Percentage",
+   "mandatory_depends_on": "eval:doc.component_type == \"Percentage of Indent Value\""
+  },
+  {
+   "columns": 2,
+   "depends_on": "eval:doc.component_type == \"Rate per UOM\"",
+   "description": "Optional -- which Indent item this per-unit rate is based on.",
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item"
+  },
+  {
+   "columns": 1,
+   "depends_on": "eval:doc.component_type == \"Rate per UOM\"",
+   "fieldname": "qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Quantity",
+   "mandatory_depends_on": "eval:doc.component_type == \"Rate per UOM\""
+  },
+  {
+   "columns": 1,
+   "depends_on": "eval:doc.component_type == \"Rate per UOM\"",
+   "fieldname": "rate",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Rate",
+   "mandatory_depends_on": "eval:doc.component_type == \"Rate per UOM\"",
+   "options": "currency"
+  },
+  {
+   "depends_on": "eval:doc.component_type == \"Fixed Amount\"",
+   "fieldname": "fixed_amount",
+   "fieldtype": "Currency",
+   "label": "Fixed Amount",
+   "mandatory_depends_on": "eval:doc.component_type == \"Fixed Amount\"",
+   "options": "currency"
+  },
+  {
+   "columns": 2,
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Amount",
+   "options": "currency",
+   "read_only": 1
+  }
+ ],
+ "idx": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-23 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Smart App",
+ "name": "Commission Invoice Component",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

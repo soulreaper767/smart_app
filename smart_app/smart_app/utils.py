@@ -361,6 +361,41 @@ def ensure_default_price_list(party_doctype, party_name, display_name):
 	return price_list_name
 
 
+def ensure_customer_for_supplier(supplier_name):
+	"""Commission Invoice (see that doctype's own submit logic) bills the
+	Supplier for this app's actual revenue -- the commission on an Indent
+	they fulfilled, not the trade's own full value (that's between Buyer
+	and Supplier directly; Smart Chemicals is never paid it). Core
+	ERPNext's Sales Invoice always bills a *Customer*, never a Supplier
+	directly, so the Supplier needs a matching Customer record to stand in
+	as the actual billing party -- created once, reused every time after
+	(via the `represents_supplier` Custom Field, setup_commission_invoice
+	in install.py), never duplicated."""
+	existing = frappe.db.get_value("Customer", {"represents_supplier": supplier_name}, "name")
+	if existing:
+		return existing
+
+	supplier = frappe.db.get_value(
+		"Supplier", supplier_name, ["supplier_name", "supplier_group"], as_dict=True
+	)
+	customer_name = supplier.supplier_name or supplier_name
+	if frappe.db.exists("Customer", customer_name):
+		customer_name = f"{customer_name} (Commission)"
+
+	customer = frappe.get_doc(
+		{
+			"doctype": "Customer",
+			"customer_name": customer_name,
+			"customer_type": "Company",
+			"customer_group": frappe.db.get_single_value("Selling Settings", "customer_group"),
+			"territory": frappe.db.get_single_value("Selling Settings", "territory"),
+			"represents_supplier": supplier_name,
+		}
+	)
+	customer.insert(ignore_permissions=True, ignore_mandatory=True)
+	return customer.name
+
+
 def create_default_price_list_for_customer(doc, method=None):
 	"""Customer.after_insert."""
 	ensure_default_price_list("Customer", doc.name, doc.customer_name or doc.name)
@@ -535,17 +570,98 @@ def close_indents_on_full_payment(doc, method=None):
 	"""Sales Invoice.on_update: an Indent's `indent_status` is entirely
 	automatic (see Indent.on_submit in indent.py) -- Submitted always means
 	"In Process", and the only thing that ever moves it on to "Closed" is
-	the linked Sales Invoice actually being paid in full, checked here
-	every time the invoice is saved (a Payment Entry reconciling against it
-	updates and re-saves it, which is what actually re-fires this). No
-	manual "mark as" button by design -- keeps the whole lifecycle tied to
-	real payment status instead of someone remembering to click something."""
+	its own Commission Invoice's Sales Invoice (the commission amount --
+	this app's actual revenue, never the trade's own full value, see
+	Commission Invoice) being paid in full, checked here every time that
+	Sales Invoice is saved (a Payment Entry reconciling against it updates
+	and re-saves it, which is what actually re-fires this). No manual
+	"mark as" button for this path -- keeps the lifecycle tied to real
+	payment status; a Commission Officer can still write off a stalled
+	balance and close both manually (Commission Invoice.write_off_and_close)
+	for the "unlikely to ever be received" case."""
+	if not frappe.db.exists("DocType", "Commission Invoice"):
+		return
 	if doc.docstatus != 1 or flt(doc.outstanding_amount) != 0:
 		return
 
-	for indent_name in frappe.get_all(
-		"Indent",
-		filters={"sales_invoice": doc.name, "docstatus": 1, "indent_status": ["!=", "Closed"]},
-		pluck="name",
+	for ci in frappe.get_all(
+		"Commission Invoice",
+		filters={"sales_invoice": doc.name, "docstatus": 1, "commission_status": ["!=", "Received"]},
+		fields=["name", "indent"],
 	):
-		frappe.db.set_value("Indent", indent_name, "indent_status", "Closed")
+		frappe.db.set_value("Commission Invoice", ci.name, "commission_status", "Received")
+		if ci.indent:
+			frappe.db.set_value(
+				"Indent",
+				ci.indent,
+				"indent_status",
+				"Closed",
+				update_modified=False,
+			)
+
+
+def send_commission_reminder_email(commission_invoice):
+	"""Emails the Supplier's default contact about an outstanding
+	commission -- used both by the manual "Send Reminder" button
+	(commission_invoice.py, on demand) and send_overdue_commission_reminders
+	below (the daily scheduled sweep). Returns False rather than throwing
+	when there's simply no contact/email on file, since the scheduled sweep
+	calls this in a loop and one missing contact shouldn't stop the rest."""
+	from frappe.contacts.doctype.contact.contact import get_default_contact
+
+	if not commission_invoice.supplier:
+		return False
+
+	contact_name = get_default_contact("Supplier", commission_invoice.supplier)
+	email = frappe.db.get_value("Contact", contact_name, "email_id") if contact_name else None
+	if not email:
+		return False
+
+	frappe.sendmail(
+		recipients=[email],
+		subject=frappe._("Commission payment reminder — {0}").format(commission_invoice.name),
+		message=frappe.render_template(
+			"""
+			<p>Dear {{ supplier_name }},</p>
+			<p>This is a reminder that a commission of {{ currency }} {{ "%.2f"|format(outstanding) }}
+			is outstanding against Indent {{ indent }}{% if due_date %} (due {{ due_date }}){% endif %}.</p>
+			<p>Please arrange payment at your earliest convenience.</p>
+			""",
+			{
+				"supplier_name": commission_invoice.supplier_name,
+				"currency": commission_invoice.currency,
+				"outstanding": flt(commission_invoice.outstanding_amount),
+				"indent": commission_invoice.indent,
+				"due_date": frappe.utils.formatdate(commission_invoice.due_date)
+				if commission_invoice.due_date
+				else None,
+			},
+		),
+		reference_doctype="Commission Invoice",
+		reference_name=commission_invoice.name,
+	)
+	return True
+
+
+def send_overdue_commission_reminders():
+	"""Scheduled daily (see hooks.py scheduler_events) -- emails a reminder
+	for every submitted, not-yet-Received/Written-Off Commission Invoice
+	whose due date has passed and still has an outstanding balance. The
+	manual "Send Reminder" button (commission_invoice.py) uses the same
+	underlying email for an on-demand nudge."""
+	if not frappe.db.exists("DocType", "Commission Invoice"):
+		return
+
+	overdue = frappe.get_all(
+		"Commission Invoice",
+		filters={
+			"docstatus": 1,
+			"commission_status": ["not in", ["Received", "Written Off"]],
+			"due_date": ["<", frappe.utils.today()],
+		},
+		pluck="name",
+	)
+	for name in overdue:
+		doc = frappe.get_doc("Commission Invoice", name)
+		if flt(doc.outstanding_amount) > 0:
+			send_commission_reminder_email(doc)

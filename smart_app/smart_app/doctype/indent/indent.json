@@ -15,8 +15,7 @@
   "currency",
   "amended_from",
   "section_break_source",
-  "sales_invoice",
-  "sales_order",
+  "quotation",
   "inquiry",
   "section_break_parties",
   "customer",
@@ -124,18 +123,11 @@
    "label": "Source"
   },
   {
-   "description": "Set once, via \"Get Items From > Sales Invoice\" -- the only supported way to populate this Indent.",
-   "fieldname": "sales_invoice",
+   "description": "Set once, via \"Get Items From > Quotation\" -- the only supported way to populate this Indent. Deliberately the source, not Sales Order/Sales Invoice: this app's revenue is the commission on the Indent (see Commission Invoice), never the trade's full value, so Indent doesn't wait on -- or depend on -- whatever happens to the Quotation's own downstream Sales Order/Invoice.",
+   "fieldname": "quotation",
    "fieldtype": "Link",
-   "label": "Sales Invoice",
-   "options": "Sales Invoice",
-   "read_only": 1
-  },
-  {
-   "fieldname": "sales_order",
-   "fieldtype": "Link",
-   "label": "Sales Order",
-   "options": "Sales Order",
+   "label": "Quotation",
+   "options": "Quotation",
    "read_only": 1
   },
   {

@@ -101,3 +101,14 @@ doc_events = {
 		"on_update": "smart_app.smart_app.utils.close_indents_on_full_payment",
 	},
 }
+
+# Scheduled Tasks
+# ------------------
+# Overdue commission reminders (see Commission Invoice's own 48-hour SWIFT-
+# copy payment terms) -- the same email the manual "Send Reminder" button
+# sends, automatically, once a day, for anything actually overdue.
+scheduler_events = {
+	"daily": [
+		"smart_app.smart_app.utils.send_overdue_commission_reminders",
+	],
+}

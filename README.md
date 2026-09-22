@@ -590,49 +590,42 @@ still blasts every supplier on every item regardless of type or preference,
 since "send RFQ to all of them" was the whole point; Preferred/Type are for
 a human scanning the Item form, not a filter on who gets contacted.
 
-## The direct-sale pipeline and Indent
+## The direct-sale pipeline, Indent, and Commission Invoice
 
-A second pipeline for when the Commercial team sells directly to the
-customer, forking off the same Quotation the buying pipeline (Quotation →
-RFQ → Supplier Quotation) already uses: **Quotation → Sales Order → Sales
-Invoice → Indent**.
+**This app's own revenue is the commission earned on an Indent, never the
+trade's own full value** — Smart Chemicals indents/brokers a deal between a
+Buyer (Customer) and a Seller (Supplier); the Buyer pays the Supplier
+directly for the goods, and the Supplier in turn owes Smart Chemicals a
+commission for arranging it. Two consequences run through everything
+below: **Indent is sourced from Quotation**, not from a Sales Order/Sales
+Invoice for the trade's own value (so it never waits on, or depends on,
+whether one even exists), and a dedicated **Commission Invoice** doctype —
+not the trade's own Sales Invoice — is what actually posts revenue.
 
-- **Quotation → Sales Order**: entirely native ERPNext, both directions —
-  Quotation's own **"Create → Sales Order"** button, and the reverse
-  **"Get Items From → Quotation"** on a blank Sales Order (both call
-  `erpnext.selling.doctype.quotation.quotation.make_sales_order`). Nothing
-  to build here at all beyond the permission grant below. (An earlier
-  version of this pipeline built Sales Order directly from Inquiry with its
-  own mapper/button; removed in favour of this, since it's what ERPNext
-  already provides — `setup_sales_pipeline_integration` deletes that old
-  Client Script from any site that already migrated with it.)
-- **Sales Order → Sales Invoice**: equally native — core's own
-  "Create → Sales Invoice" button, no customisation needed here either.
-- **Sales Invoice → Indent**: once a Sales Invoice is **submitted**, a
-  **"Create → Indent"** button (`SALES_INVOICE_CLIENT_SCRIPT_JS` in
-  `install.py`) builds a draft Indent from it; the reverse
-  **"Get Items From → Sales Invoice"** button on a blank Indent
-  (`indent.js`) does the same in place, for anyone who starts from a blank
-  Indent instead. Shared-builder / two-whitelisted-functions split, same
-  shape as RFQ's own Quotation-picker (`_build_indent_from_sales_invoice`,
-  `create_indent_from_sales_invoice`, `get_indent_data_from_sales_invoice` —
-  all in `indent.py`), for the same reason: `erpnext.utils.map_current_doc`
-  clones *rows* into an existing table, not one whole source document onto
-  a blank one.
-- **`inquiry` traceability, two hops removed.** Custom Fields on both
-  **Sales Order** and **Sales Invoice** (both hidden — internal chain-
-  tracing only, like RFQ's own `inquiry` field). Neither of core ERPNext's
-  native mappers know about a Custom Field added after the fact, so neither
-  carries it over on its own: `set_inquiry_from_quotation` (`utils.py`,
-  `Sales Order.validate`) reads it from whichever Quotation the Sales Order
-  was created from (via `prevdoc_docname`, which the native mapper *does*
-  set on every Sales Order Item regardless); `set_inquiry_from_sales_order`
-  (`Sales Invoice.validate`) does the same one hop further, from the Sales
-  Order the invoice's own item rows reference.
-- **Permissions**: `grant_commercial_access` now also grants Commercial
-  Officer/Manager full `select+read+write+create+submit+print+email+
-  report+export` on **Sales Order** and **Sales Invoice**, the same shape
-  already granted for Quotation/RFQ.
+A parallel, optional pipeline still exists for whatever paperwork the
+Commercial team wants for the trade itself, forking off the same Quotation
+the buying pipeline (Quotation → RFQ → Supplier Quotation) already uses:
+**Quotation → Sales Order → Sales Invoice**. Entirely native ERPNext, both
+directions at each step (Quotation's own **"Create → Sales Order"**
+button and the reverse **"Get Items From → Quotation"** on a blank Sales
+Order, both via `erpnext.selling.doctype.quotation.quotation.
+make_sales_order`; Sales Order → Sales Invoice equally native) — nothing to
+build here beyond the permission grant (`grant_commercial_access` grants
+Commercial Officer/Manager full `select+read+write+create+submit+print+
+email+report+export` on both) and `inquiry` traceability Custom Fields on
+each (hidden, best-effort filled in via `set_inquiry_from_quotation`/
+`set_inquiry_from_sales_order` in `utils.py`, reading `prevdoc_docname`/
+`sales_order` since neither native mapper knows about a Custom Field added
+after the fact). **This pipeline's own Sales Invoice is never treated as
+revenue by this app** — nothing here submits, reports on, or ties Indent
+status to it; if your process does use it for paper trail, that's between
+you and whoever reconciles the books.
+
+(An earlier version of this pipeline built Sales Order directly from
+Inquiry with its own mapper/button, and Indent from a submitted Sales
+Invoice; both replaced by the above once the commission-only revenue model
+was clarified — `setup_sales_pipeline_integration` deletes both stale
+Client Scripts from any site that already migrated with either.)
 
 ### Doctype: Indent
 
@@ -643,10 +636,10 @@ field-for-field:
 
 | Field | Notes |
 |---|---|
-| `sales_invoice` | Set once via "Get Items From > Sales Invoice" (`read_only`) — the only supported way to populate an Indent |
-| `sales_order` / `inquiry` | Best-effort chain-tracing back through the Sales Invoice -> Sales Order -> Quotation; `inquiry` is hidden (internal only, like RFQ's own) |
-| `customer` / `customer_name` / `customer_address_display` | The **BUYER** — fetched from the source Sales Invoice, `read_only` |
-| `supplier` / `supplier_name` / `seller_address_display` | The **SELLER** — the Commercial Officer picks which Supplier is actually fulfilling this shipment; not derivable from the Sales Invoice |
+| `quotation` | Set once via **"Get Items From > Quotation"** (`read_only`) — the only supported way to populate an Indent; the reverse **"Create > Indent"** button lives on a submitted Quotation itself (`setup_quotation_integration`) |
+| `inquiry` | Best-effort chain-tracing back through the Quotation; hidden (internal only, like RFQ's own) |
+| `customer` / `customer_name` / `customer_address_display` | The **BUYER** — fetched from the source Quotation's own `party_name`, `read_only` |
+| `supplier` / `supplier_name` / `seller_address_display` | The **SELLER** — the Commercial Officer picks which Supplier is actually fulfilling this shipment; not derivable from the Quotation (which has no concept of one) |
 | `bank_beneficiary_name` / `bank_name` / `bank_address` / `bank_account_no` / `swift_code` | **Fetched automatically from the selected Supplier** the moment it's picked (`fetch_from`) — see Supplier bank details below |
 | `items` (→ Indent Item) | item, product description, **HS Code** (best-effort auto-filled from the Item master's own `customs_tariff_number` if set — see `_best_effort_hs_code` — always plain-editable regardless, since classification can vary by shipment), qty, UOM, unit price, total value |
 | `total_qty` / `total_amount` | Computed server-side (`Indent.calculate_totals`, `validate()`) — correct even for a row added via "Get Items From", not dependent on client JS |
@@ -716,17 +709,105 @@ in each, so a site that already migrated before this was caught self-heals
 on the next one.
 
 **Design.** Restyled as a proper corporate document rather than a literal
-scan of the source template: one type scale (a 21px letter-spaced title
-down to 9px uppercase labels), one border/colour system throughout (soft
-slate-grey grid lines, a single deep-teal accent used consistently for
-section bars and the totals rule — echoing Smart Chemicals' own branding
-without competing with whatever Letter Head sits above it), and sentence
-case on the clause paragraphs instead of a wall of capitals — while keeping
-the handful of terms the source template itself calls out in bold ("30
-days", "85% shelf-life", "OUR") bold here too. Currency values are
-comma-formatted (`"{:,.2f}".format(...)`, not raw `%.2f`). Bold is reserved
-for what actually needs emphasis — party names, the indent number, totals,
-clause category labels, signature captions — not every label.
+scan of the source template: one type scale, one border/colour system
+throughout (soft slate-grey grid lines, a single deep-teal accent used
+consistently for section bars and the totals rule — echoing Smart
+Chemicals' own branding without competing with whatever Letter Head sits
+above it), and sentence case on the clause paragraphs instead of a wall of
+capitals — while keeping the handful of terms the source template itself
+calls out in bold ("30 days", "85% shelf-life", "OUR") bold here too.
+Currency values are comma-formatted (`"{:,.2f}".format(...)`, not raw
+`%.2f`). Bold is reserved for what actually needs emphasis — party names,
+the indent number, totals, clause category labels, signature captions —
+not every label.
+
+**Single A4 page, every main print format.** Both `setup_print_format`
+(Inquiry) and `setup_indent_print_format` (Indent) set an explicit
+`@page { size: A4; margin: 8mm 9mm; }` and a compact type scale (body text
+around 7–8.3px, section bars ~7.5px, the title ~14px) — small enough that
+even Indent's full seller/buyer/items/12-field-terms-grid/bank-details/
+three-clause-blocks/shipping-marks/signatures layout fits one page without
+overflowing, while keeping the same corporate design system (one accent
+colour, bold reserved for what needs it) rather than looking cramped.
+
+### Doctype: Commission Invoice
+
+Smart App's own doctype (naming series `COMM-.YYYY.-.MM.-.####.`,
+submittable) — **this is what actually posts revenue**, not the Indent's
+own trade value or the direct-sale pipeline's Sales Invoice above.
+
+- **Source.** Built from a submitted **Indent** — "Create > Commission
+  Invoice" button on Indent (`indent.js`), or the reverse "Get Items From >
+  Indent" on a blank Commission Invoice — same shared-builder /
+  two-whitelisted-methods shape used throughout this app
+  (`_build_commission_invoice_from_indent`, `create_commission_invoice_from_indent`,
+  `get_commission_invoice_data_from_indent`, all in `commission_invoice.py`).
+  Fetches `indent_value` (the trade's full value, kept only as the base for
+  a percentage-of-value component, never itself billed), the Supplier
+  (who owes the commission) and Buyer (reference only) from the Indent.
+- **Billing a Supplier through Sales Invoice.** Core ERPNext's Sales
+  Invoice always bills a *Customer*. `ensure_customer_for_supplier`
+  (`utils.py`) auto-creates (once, reused after via the hidden
+  `represents_supplier` Custom Field on Customer) a stand-in Customer
+  record for the Supplier, purely so there's somewhere for the real
+  financial document to point.
+- **Commission calculation — mix and match.** A `components` child table
+  (**Commission Invoice Component**), each row one of **Percentage of
+  Indent Value**, **Rate per UOM** (tied to a specific Indent item,
+  optional), or **Fixed Amount** — add as many as needed, e.g. a base
+  percentage plus a per-kilogram bonus on one item plus a flat handling
+  fee, all summing to `gross_commission` (`Commission Invoice.
+  calculate_commission`, server-side, not relied on from client JS).
+- **Discount.** `discount_type` (Percentage or Fixed Amount) brings
+  `gross_commission` down to `net_commission` — the amount actually
+  invoiced.
+- **Commission payment terms — the 48-hour SLA.** `payment_due_hours`
+  (default 48) + `swift_copy_received_on` (when the Buyer's proof of
+  payment to the Supplier was received and forwarded to them as the
+  trigger for our own commission) compute `due_date`
+  (`calculate_due_date`) — also set as the underlying Sales Invoice's own
+  due date, so ageing/overdue reporting is accurate against the actual
+  agreed term, not a generic default.
+- **On submit, a real Sales Invoice is created and submitted**
+  (`create_and_submit_sales_invoice`) — one line, the `Commission Income`
+  service item (auto-created once, `ensure_commission_income_item`), rate
+  = `net_commission`, billed to the Supplier's stand-in Customer. This is
+  what actually hits the GL — native ageing, `outstanding_amount`, and
+  status (Unpaid/Overdue/Paid) all come from it for free, fetched back
+  onto Commission Invoice's own `outstanding_amount` for a quick glance.
+- **Payment, reversal, and write-off — all native ERPNext mechanics,
+  reused rather than reinvented.** "Create > Payment" on Commission
+  Invoice calls the same `erpnext.accounts.doctype.payment_entry.
+  payment_entry.get_payment_entry` core Sales Invoice's own button uses,
+  then opens the resulting draft. Cancelling a Commission Invoice cascades
+  to cancel its Sales Invoice (`on_cancel`) — Frappe's own `LinkExistsError`
+  (e.g. an unreconciled Payment Entry still against it) surfaces as-is
+  rather than being swallowed. **"Write Off & Close"**
+  (`write_off_and_close`) is for a partial receipt where the balance is
+  unlikely to ever come in: builds a *zero-payment* Payment Entry via that
+  same `get_payment_entry`, with the whole outstanding amount set as
+  `write_off_amount` against the Company's (or Accounts Settings')
+  default write-off account — the same mechanism ERPNext's own "Create >
+  Payment" dialog uses when you leave a write-off difference — then closes
+  both the Commission Invoice and its Indent.
+- **Closing the Indent.** `close_indents_on_full_payment` (`utils.py`,
+  hooked to `Sales Invoice.on_update` — re-fires whenever a Payment Entry
+  reconciles against it) checks the Commission Invoice's own Sales
+  Invoice, not the Indent's old direct link: once `outstanding_amount`
+  reaches zero, both the Commission Invoice (`commission_status =
+  "Received"`) and its Indent (`indent_status = "Closed"`) update
+  automatically. No manual button for the "fully received" path; "Write
+  Off & Close" is the manual path for "never fully will be."
+- **Reminders.** "Send Reminder" (manual, any time) and
+  `send_overdue_commission_reminders` (`utils.py`, **daily** via
+  `scheduler_events`) both email the Supplier's default Contact —
+  automatic for anything actually overdue and still outstanding, so
+  nobody has to remember to chase it.
+- **Reporting.** "Commission Register" — every non-cancelled Commission
+  Invoice with its Indent, Supplier, gross/discount/net/outstanding
+  amounts, due date, and status. An "Outstanding Commission" Number Card
+  (sum of `outstanding_amount` across everything not yet Received/Written
+  Off) sits on the Commercial Dashboard alongside the existing KPIs.
 
 **Status — entirely automatic, no manual button.** `indent_status` is
 hidden on the form until the Indent is submitted (`depends_on:

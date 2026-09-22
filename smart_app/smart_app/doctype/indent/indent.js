@@ -22,7 +22,8 @@ frappe.ui.form.on("Indent", {
 
 	refresh: function (frm) {
 		frm.trigger("set_status_indicator");
-		frm.trigger("show_get_items_from_sales_invoice_button");
+		frm.trigger("show_get_items_from_quotation_button");
+		frm.trigger("show_create_commission_invoice_button");
 	},
 
 	set_status_indicator: function (frm) {
@@ -37,38 +38,41 @@ frappe.ui.form.on("Indent", {
 		}
 	},
 
-	show_get_items_from_sales_invoice_button: function (frm) {
-		// The reverse direction of the "Create > Indent" button on Sales
-		// Invoice (SALES_INVOICE_CLIENT_SCRIPT_JS in install.py) -- lets
-		// someone start from a blank Indent and pull an existing Sales
-		// Invoice's data into it instead. Same direct data-fetch approach as
-		// RFQ's "Get Items From > Quotation" button (inquiry.js): not
-		// erpnext.utils.map_current_doc, which is built for picking rows
-		// into an existing table, not cloning one whole source document.
-		if (!frm.is_new() || !frappe.model.can_read("Sales Invoice")) return;
+	show_get_items_from_quotation_button: function (frm) {
+		// The reverse direction of the "Create > Indent" button on Quotation
+		// (setup_quotation_integration, install.py) -- lets someone start
+		// from a blank Indent and pull an existing Quotation's data into it
+		// instead. Same direct data-fetch approach as RFQ's own "Get Items
+		// From > Quotation" button (inquiry.js): not erpnext.utils.
+		// map_current_doc, which is built for picking rows into an existing
+		// table, not cloning one whole source document. Reuses Quotation's
+		// own picker query (get_quotations_for_rfq, inquiry.py) -- same
+		// "your own submitted Quotations, or all of them if you're a
+		// Manager" scoping RFQ's identical button already relies on.
+		if (!frm.is_new() || !frappe.model.can_read("Quotation")) return;
 
 		frm.add_custom_button(
-			__("Sales Invoice"),
+			__("Quotation"),
 			function () {
 				frappe.prompt(
 					[
 						{
-							fieldname: "sales_invoice",
-							label: __("Sales Invoice"),
+							fieldname: "quotation",
+							label: __("Quotation"),
 							fieldtype: "Link",
-							options: "Sales Invoice",
+							options: "Quotation",
 							reqd: 1,
 							get_query: function () {
 								return {
-									query: "smart_app.smart_app.doctype.indent.indent.get_sales_invoices_for_indent",
+									query: "smart_app.smart_app.doctype.inquiry.inquiry.get_quotations_for_rfq",
 								};
 							},
 						},
 					],
 					function (values) {
 						frappe.call({
-							method: "smart_app.smart_app.doctype.indent.indent.get_indent_data_from_sales_invoice",
-							args: { sales_invoice_name: values.sales_invoice },
+							method: "smart_app.smart_app.doctype.indent.indent.get_indent_data_from_quotation",
+							args: { quotation_name: values.quotation },
 							freeze: true,
 							freeze_message: __("Fetching items..."),
 							callback: function (r) {
@@ -77,8 +81,7 @@ frappe.ui.form.on("Indent", {
 
 								frm.set_value("company", data.company);
 								frm.set_value("currency", data.currency);
-								frm.set_value("sales_invoice", data.sales_invoice);
-								frm.set_value("sales_order", data.sales_order);
+								frm.set_value("quotation", data.quotation);
 								frm.set_value("inquiry", data.inquiry);
 								frm.set_value("customer", data.customer);
 								frm.set_value("customer_address_display", data.customer_address_display);
@@ -95,12 +98,37 @@ frappe.ui.form.on("Indent", {
 							},
 						});
 					},
-					__("Get Items From Sales Invoice"),
+					__("Get Items From Quotation"),
 					__("Fetch")
 				);
 			},
 			__("Get Items From"),
 			"btn-default"
+		);
+	},
+
+	show_create_commission_invoice_button: function (frm) {
+		// Once an Indent is submitted, the deal is formalised -- a
+		// Commission Invoice can be raised against it any time from here
+		// (see create_commission_invoice_from_indent, commission_invoice.py).
+		if (frm.doc.docstatus !== 1 || !frappe.model.can_create("Commission Invoice")) return;
+
+		frm.add_custom_button(
+			__("Commission Invoice"),
+			function () {
+				frappe.call({
+					method: "smart_app.smart_app.doctype.commission_invoice.commission_invoice.create_commission_invoice_from_indent",
+					args: { indent_name: frm.doc.name },
+					freeze: true,
+					freeze_message: __("Preparing Commission Invoice..."),
+					callback: function (r) {
+						if (r.message) {
+							frappe.set_route("Form", "Commission Invoice", r.message);
+						}
+					},
+				});
+			},
+			__("Create")
 		);
 	},
 });
