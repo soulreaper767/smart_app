@@ -1902,16 +1902,86 @@ def setup_commission_billing_field():
 
 # ---------------------------------------------------------------------------
 # Print Format
+#
+# Every custom (`custom_format=1`, raw Jinja `html`) print format in this
+# app must embed the corporate Letter Head (setup_letter_head, below)
+# itself -- unlike a format_data-driven "Standard" print format, Frappe
+# does NOT auto-wrap a custom_format template in its own standard.html
+# header/footer chrome. `letter_head`/`footer`/`no_letterhead` ARE already
+# passed into the Jinja render context regardless (frappe/www/printview.py
+# get_rendered_template), but nothing renders them unless the template
+# itself references them -- confirmed against core source; this is exactly
+# why the site-wide default Letter Head silently never appeared on Indent
+# Standard/Inquiry Standard until this was added.
+#
+# PRINT_FORMAT_LETTERHEAD_HEADER/_FOOTER below are that reference, copied
+# verbatim from Frappe's own `add_header` macro (templates/print_formats/
+# standard_macros.html) and its standard.html footer block -- same
+# `id="header-html"`/`id="footer-html"` + `hidden-pdf`/`visible-pdf`
+# convention core relies on for `frappe.utils.pdf.prepare_header_footer` to
+# find and extract them into repeating wkhtmltopdf headers/footers (its own
+# `class="letter-head"`/`class="letter-head-footer"` wrappers too, in case
+# any bundled print.bundle.css rule targets those classes specifically).
+# Every future custom print format in this app should splice these two
+# constants in exactly where setup_print_format/setup_indent_print_format
+# do below: PRINT_FORMAT_LETTERHEAD_HEADER right after the format's own
+# `<style>` block (before its title), PRINT_FORMAT_LETTERHEAD_FOOTER right
+# before its outermost closing `</div>`.
+#
+# This only reserves page space correctly if the print format ALSO
+# declares a `.print-format { margin-top/bottom/left/right: ...; }` CSS
+# rule sized to fit the header/footer images -- wkhtmltopdf's own page
+# margins come from that exact selector (frappe.utils.pdf.
+# get_print_format_styles parses `.print-format { ... }` specifically, not
+# `@page { ... }` -- the `@page` rule below is honoured by a browser/
+# Ctrl+P print pass, not by the server-side wkhtmltopdf PDF generation
+# Frappe actually uses for Print/Download PDF, so both are kept in sync
+# rather than relying on `@page` alone). Both custom print formats below
+# reserve 46mm top / 38mm bottom for the header/footer images (a
+# deliberately generous buffer over their own ~42mm/~35mm natural height at
+# full page width, since the exact width wkhtmltopdf renders them at --
+# full page width vs. margin-constrained content width -- isn't something
+# this app can verify without an actual wkhtmltopdf render).
 # ---------------------------------------------------------------------------
+
+PRINT_FORMAT_LETTERHEAD_HEADER = """
+{% if letter_head and not no_letterhead %}
+<div id="header-html" class="hidden-pdf">
+<div class="letter-head">{{ letter_head }}</div>
+</div>
+{% endif %}
+"""
+
+PRINT_FORMAT_LETTERHEAD_FOOTER = """
+{% if footer and not no_letterhead %}
+<div id="footer-html" class="visible-pdf">
+<div class="letter-head-footer">{{ footer }}</div>
+</div>
+{% endif %}
+"""
 
 
 def setup_print_format():
-	html = r"""
+	html = (
+		r"""
 <div class="inquiry-print">
 <style>
 	/* Same corporate design system as Indent Standard (one accent colour,
 	one border/type scale), sized to fit one A4 page. */
-	@page { size: A4; margin: 8mm 9mm; }
+	@page { size: A4; margin: 46mm 9mm 38mm; }
+
+	/* The @page rule above is what a browser/Ctrl+P print pass honours;
+	wkhtmltopdf (what Frappe's own Print/Download PDF actually uses)
+	reads its page margins from this ".print-format" rule instead (see
+	frappe.utils.pdf.get_print_format_styles) -- both are kept in sync so
+	the letterhead's header/footer images always have enough reserved
+	space, whichever path renders this. */
+	.print-format {
+		margin-top: 46mm;
+		margin-bottom: 38mm;
+		margin-left: 9mm;
+		margin-right: 9mm;
+	}
 
 	.inquiry-print {
 		font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -1985,7 +2055,9 @@ def setup_print_format():
 		margin-bottom: 2px;
 	}
 </style>
-
+"""
+		+ PRINT_FORMAT_LETTERHEAD_HEADER
+		+ r"""
 <div class="doc-title">Inquiry</div>
 
 <table>
@@ -2034,8 +2106,12 @@ def setup_print_format():
 	{{ doc.notes }}
 </div>
 {% endif %}
+"""
+		+ PRINT_FORMAT_LETTERHEAD_FOOTER
+		+ r"""
 </div>
-""".strip()
+"""
+	).strip()
 
 	if frappe.db.exists("Print Format", "Inquiry Standard"):
 		pf = frappe.get_doc("Print Format", "Inquiry Standard")
@@ -2087,14 +2163,28 @@ def setup_print_format():
 
 
 def setup_indent_print_format():
-	html = r"""
+	html = (
+		r"""
 <div class="indent-print">
 <style>
 	/* Compact by design -- every main print format in this app is meant to
 	fit one A4 page: small type, tight row padding, low margins throughout,
 	while keeping the same corporate design system (one accent colour, a
 	clear type scale, bold used only where it earns its place). */
-	@page { size: A4; margin: 8mm 9mm; }
+	@page { size: A4; margin: 46mm 9mm 38mm; }
+
+	/* The @page rule above is what a browser/Ctrl+P print pass honours;
+	wkhtmltopdf (what Frappe's own Print/Download PDF actually uses)
+	reads its page margins from this ".print-format" rule instead (see
+	frappe.utils.pdf.get_print_format_styles) -- both are kept in sync so
+	the letterhead's header/footer images always have enough reserved
+	space, whichever path renders this. */
+	.print-format {
+		margin-top: 46mm;
+		margin-bottom: 38mm;
+		margin-left: 9mm;
+		margin-right: 9mm;
+	}
 
 	.indent-print {
 		font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -2207,7 +2297,9 @@ def setup_indent_print_format():
 		margin-bottom: 2px;
 	}
 </style>
-
+"""
+		+ PRINT_FORMAT_LETTERHEAD_HEADER
+		+ r"""
 <div class="doc-title">Indent</div>
 
 <table>
@@ -2354,8 +2446,12 @@ def setup_indent_print_format():
 		<td><div class="signature-line">Buyer's Seal &amp; Signature</div></td>
 	</tr>
 </table>
+"""
+		+ PRINT_FORMAT_LETTERHEAD_FOOTER
+		+ r"""
 </div>
-""".strip()
+"""
+	).strip()
 
 	if frappe.db.exists("Print Format", "Indent Standard"):
 		pf = frappe.get_doc("Print Format", "Indent Standard")

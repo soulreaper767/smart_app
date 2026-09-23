@@ -835,14 +835,13 @@ default **Letter Head** doctype record, named `Smart Chemicals Pvt Ltd`:
   margin-constrained content width that specific print format ends up
   with, on every page if the document runs long (`repeat_header_footer`).
 - `is_default = 1` — the fallback Frappe uses for any document whose own
-  `letter_head` field is unset (`get_letter_head`, core `printview.py`),
-  which is every document in this app. `Company.default_letter_head` is
-  also set to the same record, for the handful of core doctypes/regional
-  templates that check that field first instead. Both **Print Settings**
-  toggles this depends on — "Print with letterhead" and "Repeat Header and
-  Footer" — default to checked on a fresh site already, but
-  `setup_letter_head` reconciles them explicitly too, in case either was
-  ever unchecked by hand.
+  `letter_head` field is unset (`get_letter_head`, core `printview.py`).
+  `Company.default_letter_head` is also set to the same record, for the
+  handful of core doctypes/regional templates that check that field first
+  instead. Both **Print Settings** toggles this depends on — "Print with
+  letterhead" and "Repeat Header and Footer" — default to checked on a
+  fresh site already, but `setup_letter_head` reconciles them explicitly
+  too, in case either was ever unchecked by hand.
 - **`before_insert` gotcha:** Frappe's own Letter Head controller
   unconditionally forces `source = "Image"` the moment a brand-new record
   is inserted ("for better UX, let user set from attachment") — harmless
@@ -855,20 +854,102 @@ default **Letter Head** doctype record, named `Smart Chemicals Pvt Ltd`:
   (`footer` HTML Editor's own field description: "Footer will display
   correctly only in PDF"), not something specific to this setup.
 
-**Page-budget tradeoff, worth checking after this change.** The header and
-footer bands are a real corporate letterhead, not a thin logo strip — at
-their natural aspect ratio they take up roughly **20% of page width as
-header height and 17% as footer height**, which on an A4 page works out to
-around **70mm combined**, repeated on every page. Both compact single-page
-formats above (Indent Standard, Inquiry Standard) were tuned to fit exactly
-one A4 page *before* any letterhead was part of the page budget — with the
-letterhead now eating a meaningful slice of that same page, **print or PDF
-one of each and check it still lands on a single page**; if either now
-spills onto a second page, the fix is tightening that print format's own
-type scale/row padding further (both already isolate all their sizing in
-one `@page`/type-scale block at the top of their `html`, in
-`setup_print_format`/`setup_indent_print_format`), not touching the
-letterhead artwork itself.
+### Custom print formats must embed the letterhead themselves
+
+`is_default = 1` alone is **not enough** for either of this app's own print
+formats (Indent Standard, Inquiry Standard). Confirmed straight from
+Frappe's own print pipeline (`frappe/www/printview.py get_rendered_template`):
+for a `format_data`-driven "Standard" print format, Frappe wraps the whole
+thing in its own `templates/print_formats/standard.html`, which *does*
+render `{{ letter_head }}`/`{{ footer }}` automatically. But for a
+**`custom_format = 1`** print format — every print format this app ships —
+the template *is* `print_format.html` directly
+(`jenv.from_string(print_format.html)`), rendered with
+`template.render(args)` and nothing wraps it. `letter_head`/`footer`/
+`no_letterhead` are still in `args`, available to reference, but **nothing
+renders them unless the template itself does** — which neither of ours
+did, so the letterhead silently never appeared on either, `is_default` or
+not.
+
+**The fix, and the convention every future custom print format in this app
+must follow:** two constants near the top of the "Print Format" section of
+`install.py` —
+
+```python
+PRINT_FORMAT_LETTERHEAD_HEADER = """
+{% if letter_head and not no_letterhead %}
+<div id="header-html" class="hidden-pdf">
+<div class="letter-head">{{ letter_head }}</div>
+</div>
+{% endif %}
+"""
+
+PRINT_FORMAT_LETTERHEAD_FOOTER = """
+{% if footer and not no_letterhead %}
+<div id="footer-html" class="visible-pdf">
+<div class="letter-head-footer">{{ footer }}</div>
+</div>
+{% endif %}
+"""
+```
+
+— copied **verbatim** from Frappe's own `add_header` macro
+(`templates/print_formats/standard_macros.html`) and `standard.html`'s own
+footer block, including the exact `id="header-html"`/`id="footer-html"` +
+`hidden-pdf`/`visible-pdf` + `letter-head`/`letter-head-footer` class
+convention — that specific `id` is what
+`frappe.utils.pdf.prepare_header_footer` looks for to extract the content
+into a *repeating* wkhtmltopdf header/footer (one per page), not just an
+inline block that only shows on whichever page it happens to fall on.
+
+Every custom print format's own `html = (...)` splices these in at two
+fixed points: `PRINT_FORMAT_LETTERHEAD_HEADER` right after its own
+`</style>` (before its title), `PRINT_FORMAT_LETTERHEAD_FOOTER` right
+before its outermost closing `</div>`. Since the surrounding markup is a
+plain Python `r"""..."""` string (deliberately, so Jinja's own
+`{{ doc.field }}` syntax passes through unmangled), splicing in a named
+constant means restructuring that single string into a
+`(r"""...""" + CONSTANT + r"""...""").strip()` concatenation rather than
+one block — see `setup_print_format`/`setup_indent_print_format` for the
+exact pattern to copy for the next one.
+
+**wkhtmltopdf reads page margins from `.print-format` CSS, not `@page`.**
+This was the other half of the fix, and easy to miss: `frappe.utils.pdf.
+get_print_format_styles` parses page-margin/page-size/orientation
+specifically off a `.print-format { ... }` rule in the print format's own
+`<style>` block — **not** the standard `@page { margin: ...; }` rule (that
+one is honoured by a browser/Ctrl+P print pass, never by the server-side
+wkhtmltopdf render Frappe's own Print/Download PDF actually uses). Once a
+print format extracts `header-html`/`footer-html` the way this one now
+does, wkhtmltopdf reserves exactly `margin-top`/`margin-bottom` worth of
+page height for them — too little, and the letterhead images overlap the
+body content. Both print formats now carry **both** rules side by side,
+kept in sync (`@page` for the browser path, `.print-format` for the real
+one):
+
+```css
+@page { size: A4; margin: 46mm 9mm 38mm; }
+.print-format { margin-top: 46mm; margin-bottom: 38mm; margin-left: 9mm; margin-right: 9mm; }
+```
+
+**Page-budget tradeoff, worth checking after this change.** 46mm top /
+38mm bottom is a deliberately generous reservation for the header/footer
+images' own natural height at full page width (~42mm/~35mm) — deliberately
+generous because the *exact* width wkhtmltopdf renders `header-html`/
+`footer-html` at (full page width vs. the same margin-constrained content
+width as the body) isn't something confirmable without an actual
+wkhtmltopdf render, which isn't available in this project's own dev
+environment; erring generous avoids the images overlapping body content if
+it turns out to be the wider case. Combined, that's **84mm of a 297mm A4
+page** spent on the letterhead alone, on every page. Both compact
+single-page formats above (Indent Standard, Inquiry Standard) were tuned to
+fit exactly one A4 page *before* any letterhead was part of that budget —
+**print or PDF one of each and confirm it still lands on a single page,
+and that the header/footer images don't overlap the body content**; if
+either needs adjusting, the fix is tightening that print format's own type
+scale/row padding, or trimming the `margin-top`/`margin-bottom` reservation
+if it turns out wkhtmltopdf is rendering at the narrower, margin-constrained
+width — not touching the letterhead artwork itself.
 
 ### Doctype: Commission Invoice
 
