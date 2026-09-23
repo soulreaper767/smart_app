@@ -1359,6 +1359,14 @@ frappe.ui.form.on("Request for Quotation", {
 				frappe.confirm(
 					__("This will submit the RFQ and email every supplier listed below. Continue?"),
 					function () {
+						// send_email_on_submit is a hidden Custom Field (see
+						// setup_quotation_integration) -- ticking it here means
+						// it's part of this one save+submit request, so
+						// CustomRequestForQuotation.on_submit (overrides.py)
+						// knows to actually email suppliers. The native
+						// "Submit" toolbar button never touches this field, so
+						// it stays unchecked and just submits, no email.
+						frm.set_value("send_email_on_submit", 1);
 						frm.savesubmit();
 					}
 				);
@@ -1425,6 +1433,31 @@ def setup_quotation_integration():
 		# stays visible but read-only, so it's there as confirmation once set.
 		_set_property_setter("Request for Quotation", "quotation", "read_only", "1", "Check")
 		_set_property_setter("Request for Quotation", "inquiry", "hidden", "1", "Check")
+
+		# Internal -- ticked only by the "Submit & Send to Suppliers" button
+		# (RFQ_CLIENT_SCRIPT_JS) just before frm.savesubmit(), so it's part
+		# of that one save+submit request. CustomRequestForQuotation.on_submit
+		# (overrides.py) only emails suppliers when this is set -- the
+		# native "Submit" toolbar button never touches it, so a plain Submit
+		# never sends and never fails for lack of an outgoing Email Account.
+		if not frappe.db.exists("Custom Field", "Request for Quotation-send_email_on_submit"):
+			frappe.get_doc(
+				{
+					"doctype": "Custom Field",
+					"dt": "Request for Quotation",
+					"fieldname": "send_email_on_submit",
+					"label": "Send Email on Submit",
+					"fieldtype": "Check",
+					"default": "0",
+					"hidden": 1,
+					"insert_after": "quotation",
+					"description": (
+						"Internal -- set by the \"Submit & Send to Suppliers\" button only. "
+						"A plain Submit leaves this unchecked, so it never emails suppliers."
+					),
+				}
+			).insert(ignore_permissions=True)
+
 		_upsert_client_script(
 			"Inquiry - Commercial Pipeline (Request for Quotation)",
 			"Request for Quotation",

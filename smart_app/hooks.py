@@ -35,6 +35,16 @@ fixtures = [
 after_install = "smart_app.install.after_install"
 after_migrate = "smart_app.install.after_migrate"
 
+# DocType Class Overrides
+# ------------------
+# Request for Quotation's own on_submit unconditionally emails every
+# supplier -- see overrides.py for why that needed a real subclass rather
+# than a doc_event (the behaviour is inside the core on_submit method
+# itself, not something that runs before/after it).
+override_doctype_class = {
+	"Request for Quotation": "smart_app.smart_app.overrides.CustomRequestForQuotation",
+}
+
 # Permissions
 # ------------------
 # Commercial Manager/Officer only ever have a reason to see a *submitted*

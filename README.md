@@ -546,13 +546,30 @@ Manager see every submitted Quotation, for oversight.
 **Sending the RFQ.** `setup_quotation_integration` adds one more Client
 Script, on Request for Quotation this time: a **"Submit & Send to
 Suppliers"** button (visible on any draft that has at least one supplier
-row), which — after a one-line confirm — calls `frm.savesubmit()`. That's
-deliberately the *entire* implementation: ERPNext's own `on_submit` for
-Request for Quotation already calls `send_to_supplier()` itself, so
-submitting **is** sending — a Commercial Officer doesn't need to separately
-find and click the native (and easy to miss) "Send Emails to Suppliers"
-button afterwards. It still is there natively for a later re-send, e.g. if a
-supplier's contact was fixed after the fact. Sending requires the site's
+row), which — after a one-line confirm — ticks a hidden `send_email_on_submit`
+Custom Field and calls `frm.savesubmit()`. A Commercial Officer doesn't need
+to separately find and click the native (and easy to miss) "Send Emails to
+Suppliers" button afterwards — submitting via this button **is** sending.
+That button still exists natively for a later re-send, e.g. if a supplier's
+contact was fixed after the fact.
+
+**The native "Submit" toolbar button, deliberately, never sends.** ERPNext's
+own `on_submit` for Request for Quotation unconditionally calls
+`self.send_to_supplier()` — so on a site with no outgoing Email Account
+configured, even a *plain* Submit (not this app's own button at all) failed
+outright trying to email suppliers nobody asked to email yet. Since that
+call is inside the core controller's own `on_submit` method, no
+`doc_events` hook can intercept it — only a real subclass can, so
+`CustomRequestForQuotation` (`smart_app/smart_app/overrides.py`, wired via
+`override_doctype_class` in `hooks.py`) replaces `on_submit` with the same
+status/reset logic, but only calls `send_to_supplier()` when
+`send_email_on_submit` is checked. The "Submit & Send to Suppliers" button
+is the only place that ever checks it (as part of the same save+submit
+request, so it lands correctly regardless of whether the form had other
+unsaved edits) — the plain native Submit leaves it unchecked and just
+submits, no email, no Email Account required.
+
+Sending (via "Submit & Send to Suppliers") still requires the site's
 Portal Settings to have Request for Quotation enabled (ERPNext's own
 `check_portal_enabled`) — since every supplier gets a link back to submit
 their reply on the buying portal, which is also the "corporate format" body:
