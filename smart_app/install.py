@@ -263,6 +263,7 @@ def setup():
 	run_step(setup_reports, "reports")
 	run_step(setup_print_format, "print format")
 	run_step(setup_indent_print_format, "indent print format")
+	run_step(setup_letter_head, "corporate letterhead (default, all print formats)")
 	run_step(setup_workspace, "workspace")
 	run_step(add_home_workspace_shortcut, "home workspace shortcut")
 	run_step(grant_inquiry_manager_workflow_access, "inquiry manager workflow access")
@@ -3160,3 +3161,110 @@ convenience.</p>
 			"response": RFQ_EMAIL_TEMPLATE_BODY,
 		}
 	).insert(ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
+# Letter Head: the firm's own corporate letterhead (source PDF at
+# D:\Others\smart_chem\Latter Head.pdf), sliced into a header band (top
+# colour stripe, logo, tagline, rule) and a footer band (rule, contact
+# icons, Lahore/Karachi office addresses) and shipped as static app assets
+# (smart_app/public/images/letterhead_{header,footer}.png -- no File
+# doctype attachment needed, `image`/Attach fields are just path strings;
+# see set_image_as_html in Frappe's own Letter Head controller). Deliberately
+# `source="HTML"` / `footer_source="HTML"` with a plain `width: 100%` <img>
+# in each, not the built-in `source="Image"` fixed-pixel-width mechanism --
+# every print format in this app (and every native ERPNext one) uses a
+# different page margin, so a hardcoded pixel width would overflow on some
+# and look undersized on others; width:100% always exactly fills whatever
+# margin-constrained content width that specific print format ends up with.
+#
+# `Letter Head.before_insert` unconditionally forces `source = "Image"` on
+# first insert ("for better UX, let user set from attachment") -- harmless
+# here since it only touches `source`, not `content`/`footer`, but it does
+# mean a brand-new site needs one extra save right after insert to put
+# `source` back to "HTML" so the Desk form shows the right (editable) HTML
+# section afterwards; `changed` reconciles this the same way on every
+# later migrate too, self-healing if it's ever out of sync.
+# ---------------------------------------------------------------------------
+
+LETTER_HEAD_NAME = "Smart Chemicals Pvt Ltd"
+
+LETTER_HEAD_HEADER_HTML = (
+	'<div style="text-align: center;">'
+	'<img src="/assets/smart_app/images/letterhead_header.png" '
+	'alt="Smart Chemicals Pvt Ltd" style="width: 100%; display: block;">'
+	"</div>"
+)
+
+LETTER_HEAD_FOOTER_HTML = (
+	'<div style="text-align: center;">'
+	'<img src="/assets/smart_app/images/letterhead_footer.png" '
+	'alt="Smart Chemicals Pvt Ltd" style="width: 100%; display: block;">'
+	"</div>"
+)
+
+
+def setup_letter_head():
+	if frappe.db.exists("Letter Head", LETTER_HEAD_NAME):
+		doc = frappe.get_doc("Letter Head", LETTER_HEAD_NAME)
+		is_new = False
+	else:
+		doc = frappe.new_doc("Letter Head")
+		doc.letter_head_name = LETTER_HEAD_NAME
+		is_new = True
+
+	changed = (
+		is_new
+		or doc.source != "HTML"
+		or doc.content != LETTER_HEAD_HEADER_HTML
+		or doc.footer_source != "HTML"
+		or doc.footer != LETTER_HEAD_FOOTER_HTML
+		or not doc.is_default
+		or doc.disabled
+	)
+
+	doc.source = "HTML"
+	doc.content = LETTER_HEAD_HEADER_HTML
+	doc.footer_source = "HTML"
+	doc.footer = LETTER_HEAD_FOOTER_HTML
+	doc.is_default = 1
+	doc.disabled = 0
+
+	if is_new:
+		doc.insert(ignore_permissions=True)
+		# before_insert (Frappe core) just forced source back to "Image" --
+		# reconcile immediately so the Desk form reflects HTML/HTML, not a
+		# half-set Image state.
+		doc.reload()
+		doc.source = "HTML"
+		doc.content = LETTER_HEAD_HEADER_HTML
+		doc.footer_source = "HTML"
+		doc.footer = LETTER_HEAD_FOOTER_HTML
+		doc.is_default = 1
+		doc.save(ignore_permissions=True)
+	elif changed:
+		doc.save(ignore_permissions=True)
+
+	# Both default to checked on a fresh site already, but reconciled
+	# explicitly here so a site where either was unchecked by hand still
+	# shows the letterhead on every print, every page, going forward.
+	print_settings = frappe.get_single("Print Settings")
+	settings_changed = False
+	if not print_settings.with_letterhead:
+		print_settings.with_letterhead = 1
+		settings_changed = True
+	if not print_settings.repeat_header_footer:
+		print_settings.repeat_header_footer = 1
+		settings_changed = True
+	if settings_changed:
+		print_settings.save(ignore_permissions=True)
+
+	# Belt-and-suspenders: Letter Head's own is_default=1 (above) already
+	# makes it the site-wide fallback for every document with no letter_head
+	# of its own set, but Company's own default_letter_head is what a few
+	# core doctypes (e.g. POS, some regional print templates) check first --
+	# keep both wired to the same Letter Head rather than leaving a second,
+	# separate place this could silently point somewhere else.
+	for company in frappe.get_all("Company", pluck="name"):
+		if frappe.db.get_value("Company", company, "default_letter_head") != LETTER_HEAD_NAME:
+			frappe.db.set_value("Company", company, "default_letter_head", LETTER_HEAD_NAME)

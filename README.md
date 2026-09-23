@@ -809,7 +809,66 @@ around 7–8.3px, section bars ~7.5px, the title ~14px) — small enough that
 even Indent's full seller/buyer/items/12-field-terms-grid/bank-details/
 three-clause-blocks/shipping-marks/signatures layout fits one page without
 overflowing, while keeping the same corporate design system (one accent
-colour, bold reserved for what needs it) rather than looking cramped.
+colour, bold reserved for what needs it) rather than looking cramped. This
+was measured against the *un-letterheaded* page — see below for how the
+Letter Head now added on top of every print format changes that budget.
+
+## Corporate Letter Head, default across every print format
+
+`setup_letter_head` turns the firm's own letterhead (source: `Latter
+Head.pdf`, supplied at the root of the project) into a real, site-wide
+default **Letter Head** doctype record, named `Smart Chemicals Pvt Ltd`:
+
+- The source PDF was rendered at 300 DPI and sliced into two pieces —
+  **`smart_app/public/images/letterhead_header.png`** (the top colour
+  stripe, logo lockup, tagline, and rule) and **`letterhead_footer.png`**
+  (the rule, phone/web/email contact icons, and Lahore/Karachi office
+  addresses) — shipped as static app assets, not File-doctype attachments
+  (an Attach field is just a path string; nothing in Frappe's own Letter
+  Head controller requires an actual File record behind it).
+- `source = "HTML"` / `footer_source = "HTML"`, each holding a single
+  `<img style="width: 100%;">` tag, **not** Letter Head's built-in
+  `source = "Image"` fixed-pixel-width mechanism — every print format in
+  this app (and every native ERPNext one) uses a different page margin, so
+  a hardcoded pixel width would overflow on some print formats and look
+  undersized on others; `width: 100%` always exactly fills whatever
+  margin-constrained content width that specific print format ends up
+  with, on every page if the document runs long (`repeat_header_footer`).
+- `is_default = 1` — the fallback Frappe uses for any document whose own
+  `letter_head` field is unset (`get_letter_head`, core `printview.py`),
+  which is every document in this app. `Company.default_letter_head` is
+  also set to the same record, for the handful of core doctypes/regional
+  templates that check that field first instead. Both **Print Settings**
+  toggles this depends on — "Print with letterhead" and "Repeat Header and
+  Footer" — default to checked on a fresh site already, but
+  `setup_letter_head` reconciles them explicitly too, in case either was
+  ever unchecked by hand.
+- **`before_insert` gotcha:** Frappe's own Letter Head controller
+  unconditionally forces `source = "Image"` the moment a brand-new record
+  is inserted ("for better UX, let user set from attachment") — harmless
+  to `content`/`footer` themselves, but it does mean a fresh site needs one
+  immediate follow-up save to put `source` back to `"HTML"`, which
+  `setup_letter_head` does right after `insert()`. Self-healing on every
+  later migrate too if it's ever out of sync.
+- The footer only actually renders in the generated **PDF**, not in the
+  on-screen Print Preview panel — that's standard Frappe behaviour
+  (`footer` HTML Editor's own field description: "Footer will display
+  correctly only in PDF"), not something specific to this setup.
+
+**Page-budget tradeoff, worth checking after this change.** The header and
+footer bands are a real corporate letterhead, not a thin logo strip — at
+their natural aspect ratio they take up roughly **20% of page width as
+header height and 17% as footer height**, which on an A4 page works out to
+around **70mm combined**, repeated on every page. Both compact single-page
+formats above (Indent Standard, Inquiry Standard) were tuned to fit exactly
+one A4 page *before* any letterhead was part of the page budget — with the
+letterhead now eating a meaningful slice of that same page, **print or PDF
+one of each and check it still lands on a single page**; if either now
+spills onto a second page, the fix is tightening that print format's own
+type scale/row padding further (both already isolate all their sizing in
+one `@page`/type-scale block at the top of their `html`, in
+`setup_print_format`/`setup_indent_print_format`), not touching the
+letterhead artwork itself.
 
 ### Doctype: Commission Invoice
 
