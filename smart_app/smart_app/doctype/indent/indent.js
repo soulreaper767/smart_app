@@ -85,6 +85,7 @@ frappe.ui.form.on("Indent", {
 								frm.set_value("inquiry", data.inquiry);
 								frm.set_value("customer", data.customer);
 								frm.set_value("customer_address_display", data.customer_address_display);
+								frm.set_value("supplier", data.supplier);
 								frm.set_value("tc_name", data.tc_name);
 								frm.set_value("terms", data.terms);
 

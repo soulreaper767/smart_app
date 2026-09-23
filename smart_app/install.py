@@ -177,6 +177,14 @@ COMMERCIAL_SHORTCUTS = [
 		"doc_view": "List",
 		"color": "#22C55E",
 	},
+	{
+		"label": "Supplier Comparative Statements",
+		"type": "DocType",
+		"link_to": "Supplier Comparative Statement",
+		"doc_view": "List",
+		"color": "#22C55E",
+	},
+	{"label": "Purchase Orders", "type": "DocType", "link_to": "Purchase Order", "doc_view": "List", "color": "#A855F7"},
 	{"label": "Sales Orders", "type": "DocType", "link_to": "Sales Order", "doc_view": "List", "color": "#A855F7"},
 	{
 		"label": "Sales Invoices",
@@ -400,7 +408,6 @@ def grant_commercial_access():
 		"Currency",
 		"Customer",
 		"Contact",
-		"Purchase Order",
 		"UOM",
 		"Sales Taxes and Charges Template",
 		"Purchase Taxes and Charges Template",
@@ -435,7 +442,21 @@ def grant_commercial_access():
 		# actions -- the automatic ones run with ignore_permissions=True,
 		# but a Commercial Officer/Manager finishing one by hand (or
 		# recording any other payment) needs real create/write here.
-		for doctype in ("Quotation", "Request for Quotation", "Sales Order", "Sales Invoice", "Payment Entry"):
+		# Purchase Order and Supplier Comparative Statement are both part of
+		# the buying pipeline's own "Create" automation (Quotation -> RFQ ->
+		# Comparative Statement -> Purchase Order/Indent, see
+		# supplier_comparative_statement.py) -- full create/write/submit,
+		# not just select+read, since the Commercial team is the one who
+		# actually raises and submits both from those buttons.
+		for doctype in (
+			"Quotation",
+			"Request for Quotation",
+			"Sales Order",
+			"Sales Invoice",
+			"Payment Entry",
+			"Purchase Order",
+			"Supplier Comparative Statement",
+		):
 			_grant_custom_docperm(
 				doctype, role, select=1, read=1, write=1, create=1, submit=1, print=1, email=1,
 				report=1, export=1,
@@ -1188,24 +1209,59 @@ frappe.ui.form.on("Quotation", {
 			});
 		}
 
+		// Purchase Order and Indent are both gated on a submitted Supplier
+		// Comparative Statement (see supplier_comparative_statement.py) --
+		// its winning per-item Supplier selection is what both documents
+		// source their items/rates/Supplier from, grouped identically (one
+		// PO/Indent per distinct winning Supplier), so the two buttons
+		// below always read the exact same underlying data. The button
+		// itself is always shown once the Quotation is submitted, so it's
+		// discoverable -- clicking it before the Comparative Statement is
+		// submitted surfaces a clear error explaining what's still needed,
+		// rather than hiding the option entirely.
+		//
 		// Indent is deliberately sourced from Quotation, not Sales Order/
 		// Sales Invoice -- this app's revenue is the commission on the
 		// Indent (see Commission Invoice), never the trade's own full
 		// value, so Indent doesn't wait on whatever happens downstream.
-		if (frm.doc.docstatus === 1 && frappe.model.can_create("Indent")) {
-			frm.add_custom_button(__("Indent"), function () {
-				frappe.call({
-					method: "smart_app.smart_app.doctype.indent.indent.create_indent_from_quotation",
-					args: { quotation_name: frm.doc.name },
-					freeze: true,
-					freeze_message: __("Preparing Indent..."),
-					callback: function (r) {
-						if (r.message) {
-							frappe.set_route("Form", "Indent", r.message);
-						}
-					},
-				});
-			}, __("Create"));
+		if (frm.doc.docstatus === 1) {
+			if (frappe.model.can_create("Purchase Order")) {
+				frm.add_custom_button(__("Purchase Order"), function () {
+					frappe.call({
+						method: "smart_app.smart_app.doctype.supplier_comparative_statement.supplier_comparative_statement.create_purchase_orders_from_quotation",
+						args: { quotation_name: frm.doc.name },
+						freeze: true,
+						freeze_message: __("Preparing Purchase Order..."),
+						callback: function (r) {
+							if (!r.message) return;
+							if (r.message.length === 1) {
+								frappe.set_route("Form", "Purchase Order", r.message[0]);
+							} else {
+								frappe.set_route("List", "Purchase Order", { name: ["in", r.message] });
+							}
+						},
+					});
+				}, __("Create"));
+			}
+
+			if (frappe.model.can_create("Indent")) {
+				frm.add_custom_button(__("Indent"), function () {
+					frappe.call({
+						method: "smart_app.smart_app.doctype.supplier_comparative_statement.supplier_comparative_statement.create_indents_from_quotation",
+						args: { quotation_name: frm.doc.name },
+						freeze: true,
+						freeze_message: __("Preparing Indent..."),
+						callback: function (r) {
+							if (!r.message) return;
+							if (r.message.length === 1) {
+								frappe.set_route("Form", "Indent", r.message[0]);
+							} else {
+								frappe.set_route("List", "Indent", { name: ["in", r.message] });
+							}
+						},
+					});
+				}, __("Create"));
+			}
 		}
 	},
 });
@@ -1307,6 +1363,33 @@ frappe.ui.form.on("Request for Quotation", {
 					}
 				);
 			}).addClass("btn-primary");
+		}
+
+		// Once sent, suppliers reply with Supplier Quotations against this
+		// RFQ -- a Comparative Statement is where those rates actually get
+		// compared and a winner picked per item (see
+		// supplier_comparative_statement.py). Available as soon as the RFQ
+		// is submitted; it doesn't need every supplier to have replied yet
+		// (see refresh_rates for pulling in later replies).
+		if (
+			!frm.is_new() &&
+			frm.doc.docstatus === 1 &&
+			frappe.model.can_create("Supplier Comparative Statement")
+		) {
+			frm.add_custom_button(__("Supplier Comparative Statement"), function () {
+				frappe.call({
+					method:
+						"smart_app.smart_app.doctype.supplier_comparative_statement.supplier_comparative_statement.create_comparative_statement_from_rfq",
+					args: { rfq_name: frm.doc.name },
+					freeze: true,
+					freeze_message: __("Preparing Comparative Statement..."),
+					callback: function (r) {
+						if (r.message) {
+							frappe.set_route("Form", "Supplier Comparative Statement", r.message);
+						}
+					},
+				});
+			}, __("Create"));
 		}
 	},
 });
@@ -2298,6 +2381,12 @@ LINK_CARDS = [
 			{"label": "Quotation", "link_type": "DocType", "link_to": "Quotation"},
 			{"label": "Request for Quotation", "link_type": "DocType", "link_to": "Request for Quotation"},
 			{"label": "Supplier Quotation", "link_type": "DocType", "link_to": "Supplier Quotation"},
+			{
+				"label": "Supplier Comparative Statement",
+				"link_type": "DocType",
+				"link_to": "Supplier Comparative Statement",
+			},
+			{"label": "Purchase Order", "link_type": "DocType", "link_to": "Purchase Order"},
 			{"label": "Sales Order", "link_type": "DocType", "link_to": "Sales Order"},
 			{"label": "Sales Invoice", "link_type": "DocType", "link_to": "Sales Invoice"},
 			{"label": "Indent", "link_type": "DocType", "link_to": "Indent"},

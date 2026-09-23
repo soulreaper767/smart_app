@@ -590,6 +590,70 @@ still blasts every supplier on every item regardless of type or preference,
 since "send RFQ to all of them" was the whole point; Preferred/Type are for
 a human scanning the Item form, not a filter on who gets contacted.
 
+## Supplier Comparative Statement, and the Purchase Order / Indent gate
+
+Once a Request for Quotation is **submitted** (and sent), suppliers reply
+with their own Supplier Quotations — logged either automatically via the
+buying portal or manually by a Commercial Officer (see "Sending the RFQ"
+above). Comparing those replies and picking a winner per item is a new
+doctype, **Supplier Comparative Statement** (`SCS-.YYYY.-.MM.-.####.`,
+submittable, `smart_app/smart_app/doctype/supplier_comparative_statement/`):
+
+- **"Create → Supplier Comparative Statement"** on a submitted RFQ builds
+  one, or the reverse **"Get Items From → Request for Quotation"** on a
+  blank statement pulls the same data in — same shared-builder pattern
+  (`_build_comparative_statement_from_rfq`) as every other "X ⇄ Y" pair in
+  this app. It doesn't need every supplier to have replied yet: **"Refresh
+  Rates"** re-pulls any newly-submitted Supplier Quotation rows against the
+  same RFQ at any point while the statement is still a draft, adding only
+  genuinely new `(item, supplier)` combinations and never touching a
+  selection already made.
+- The **Suppliers Sent** table lists every supplier the RFQ went to and
+  whether they've quoted yet (`quoted`); the **Rates** table has one row per
+  `(item, supplier)` combination that actually quoted, with an **`is_selected`**
+  checkbox — tick the winning supplier's row for each item.
+  `enforce_single_selection_per_item` (`validate()`) keeps this to at most
+  one winner per item, same self-correcting pattern as Item's own Preferred
+  Supplier flag.
+- **Submitting is the lock.** `before_submit` refuses to submit until
+  *every* item on the statement has exactly one selected row — the error
+  names which items are still missing a winner. Once submitted, it's
+  read-only (`comparative_status = "Completed"`) and becomes the single
+  source of truth for that Quotation's actual sourcing.
+
+**Back on the Quotation**, two buttons — **"Create → Purchase Order"** and
+**"Create → Indent"** — are both visible as soon as the Quotation itself is
+submitted (so they're discoverable), but both call
+`_require_comparative_statement` first: if no submitted Supplier
+Comparative Statement exists yet for this Quotation, clicking either shows
+a clear error explaining what's still needed, rather than either button
+being hidden with no explanation. Once a statement is submitted, both work
+off `_selected_rows_by_supplier` — the exact same grouping of the exact
+same winning selection, item rate/qty/Supplier included, so a Purchase
+Order and an Indent for the same Quotation always source identically ("same
+links to get items from," verbatim). If the winning selection spans more
+than one Supplier (different items awarded to different suppliers), one
+Purchase Order *and* one Indent is created **per Supplier** automatically,
+and the button navigates to a filtered list instead of a single form; with
+one Supplier, it navigates straight to the one document created.
+
+The reverse **"Get Items From → Quotation"** button on a *blank* Indent
+(`indent.js`) uses this same gate — it only works when the Comparative
+Statement's selection is for a single Supplier; with more than one, it
+throws an error pointing at the Quotation's own "Create → Indent" button
+instead (which handles the per-Supplier split as above). This is
+`get_indent_data_from_quotation`'s entire job now — the standalone
+`create_indent_from_quotation` this replaced (which let anyone build an
+Indent straight off the Quotation's own original, possibly stale, estimated
+rate) is gone.
+
+`grant_commercial_access` gives Commercial Officer/Manager full
+`select+read+write+create+submit+print+email+report+export` on both
+**Supplier Comparative Statement** and **Purchase Order** (the latter was
+previously select+read only, needed upgrading now that the Commercial team
+actually raises and submits Purchase Orders from this flow, not just
+browses ones raised elsewhere).
+
 ## The direct-sale pipeline, Indent, and Commission Invoice
 
 **This app's own revenue is the commission earned on an Indent, never the
@@ -636,17 +700,17 @@ field-for-field:
 
 | Field | Notes |
 |---|---|
-| `quotation` | Set once via **"Get Items From > Quotation"** (`read_only`) — the only supported way to populate an Indent; the reverse **"Create > Indent"** button lives on a submitted Quotation itself (`setup_quotation_integration`) |
+| `quotation` | Set once via **"Get Items From > Quotation"** (`read_only`) — the only supported way to populate an Indent; the reverse **"Create > Indent"** button lives on a submitted Quotation itself, gated on a submitted Supplier Comparative Statement (see above) |
 | `inquiry` | Best-effort chain-tracing back through the Quotation; hidden (internal only, like RFQ's own) |
 | `customer` / `customer_name` / `customer_address_display` | The **BUYER** — fetched from the source Quotation's own `party_name`, `read_only` |
-| `supplier` / `supplier_name` / `seller_address_display` | The **SELLER** — the Commercial Officer picks which Supplier is actually fulfilling this shipment; not derivable from the Quotation (which has no concept of one) |
+| `supplier` / `supplier_name` / `seller_address_display` | The **SELLER** — auto-filled from the Supplier Comparative Statement's own winning selection for this group of items (`build_indent_doc_for_supplier`), freely editable afterwards if it needs correcting by hand |
 | `bank_beneficiary_name` / `bank_name` / `bank_address` / `bank_account_no` / `swift_code` | **Fetched automatically from the selected Supplier** the moment it's picked (`fetch_from`) — see Supplier bank details below |
 | `items` (→ Indent Item) | item, product description, **HS Code** (best-effort auto-filled from the Item master's own `customs_tariff_number` if set — see `_best_effort_hs_code` — always plain-editable regardless, since classification can vary by shipment), qty, UOM, unit price, total value |
 | `total_qty` / `total_amount` | Computed server-side (`Indent.calculate_totals`, `validate()`) — correct even for a row added via "Get Items From", not dependent on client JS |
 | `payment_terms` (→ Inquiry Payment Mode) / `incoterm` (→ Inquiry Incoterm) | Reuse Inquiry's own existing manager-editable master lists — `seed_master_data` adds "DP AT SIGHT"/"CPT" to them, the values the sample template itself uses |
 | `lead_time` / `port_of_loading` / `destination` / `origin` / `packing` | All Link → the new **Indent Trade Term** master list (below), each scoped to its own `term_type` |
 | `trans_shipment` / `partial_shipment` / `gmp_availability` / `fta_availability` / `ws_availability` | Select, Allowed/Not Allowed or Available/Not Available |
-| `tc_name` / `terms` | The standard ERPNext Terms-and-Conditions mechanism (Link → template, Text Editor fetched from it) — **defaults from the source Sales Invoice's own `tc_name`/`terms`** when built via "Get Items From", freely editable afterwards |
+| `tc_name` / `terms` | The standard ERPNext Terms-and-Conditions mechanism (Link → template, Text Editor fetched from it) — **defaults from the source Quotation's own `tc_name`/`terms`** when built via "Get Items From", freely editable afterwards |
 | `indent_status` | Hidden until submitted (`depends_on`); then entirely automatic — see Status below |
 
 Every one of the 12 "Terms & Conditions" grid fields from the template is

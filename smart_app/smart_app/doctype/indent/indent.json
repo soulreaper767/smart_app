@@ -144,7 +144,7 @@
    "label": "Buyer & Seller"
   },
   {
-   "description": "BUYER -- fetched from the Sales Invoice this Indent was built from.",
+   "description": "BUYER -- fetched from the Quotation this Indent was built from.",
    "fieldname": "customer",
    "fieldtype": "Link",
    "label": "Buyer (Customer)",
