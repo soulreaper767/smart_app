@@ -1365,6 +1365,8 @@ on migrate; run it by hand when ready:
 # preview only, writes nothing:
 bench --site <your-site> execute smart_app.item_uom_migration.set_all_items_to_kg --kwargs "{'dry_run': True}"
 bench --site <your-site> execute smart_app.item_uom_migration.set_all_items_to_kg
+# force through items with existing stock transactions too:
+bench --site <your-site> execute smart_app.item_uom_migration.set_all_items_to_kg --kwargs "{'force': True}"
 ```
 
 Updates `stock_uom` (Item's actual Default Unit of Measure) plus
@@ -1373,17 +1375,27 @@ other than Kg (a populated override would otherwise keep transacting in
 the old unit even after `stock_uom` itself is fixed; a blank one already
 means "use stock_uom" and is left alone).
 
-**Items with existing Stock Ledger Entries are skipped, not forced** — the
-same guard core ERPNext itself applies (`Item.validate()` normally refuses
-to change `stock_uom` once stock has actually moved for that Item, since
-every past transaction's quantity was recorded against the *old* unit;
-forcing it now would make historical stock reports silently misreport old
-quantities as Kg with no real conversion applied). Skipped Items are
-listed by name in the printed summary for manual review — correcting one
-generally means a fresh Item plus a Stock Reconciliation, not something
-this script decides on its own. Every other Item goes through the normal
-`doc.save()`, not a raw SQL/`db.set_value` bypass, so Frappe's own
-UOM-conversion recompute and any other Item validation still runs.
+**Default (`force=False`): Items with existing Stock Ledger Entries are
+skipped, not changed** — the same guard core ERPNext itself applies
+(`Item.validate_uom()` → `check_stock_uom_with_bin()`, `erpnext/stock/
+doctype/item/item.py`, throws once a Stock Ledger Entry already exists for
+that Item in a different unit). Skipped Items are listed by name in the
+printed summary. Every other Item goes through the normal `doc.save()`,
+not a raw SQL/`db.set_value` bypass, so Frappe's own UOM-conversion
+recompute and any other Item validation still runs.
+
+**`force=True`: changed anyway** — writes `stock_uom`/`purchase_uom`/
+`sales_uom` directly via `frappe.db.set_value` (the only way past
+`check_stock_uom_with_bin`, same "raw update, not `doc.save()`" pattern
+`currency_migration.py` uses for its own must-bypass-validation case), and
+inserts a `conversion_factor = 1` UOM Conversion Detail row for Kg on the
+Item directly if one isn't already there (what the normal save path would
+otherwise do). **What this does not do**: touch any existing Stock Ledger
+Entry, Bin balance, or already-created document's line — those keep
+whatever unit they were actually recorded in; only the Item master's own
+default changes, which is what every *future* transaction reads its
+default UOM from. Existing stock reports/balances are not retroactively
+reinterpreted.
 
 ## Roadmap
 
