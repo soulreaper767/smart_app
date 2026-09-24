@@ -1354,6 +1354,37 @@ bench --site <your-site> execute smart_app.supplier_import.import_suppliers
 bench --site <your-site> execute smart_app.supplier_import.import_suppliers --kwargs "{'dry_run': True}"
 ```
 
+## Item UOM correction script
+
+`smart_app/item_uom_migration.py` sets every Item's Unit of Measure to
+**Kg**, whatever it's currently set to. **Not wired into install.py or a
+patch** — unlike the currency switch above, this doesn't run automatically
+on migrate; run it by hand when ready:
+
+```bash
+# preview only, writes nothing:
+bench --site <your-site> execute smart_app.item_uom_migration.set_all_items_to_kg --kwargs "{'dry_run': True}"
+bench --site <your-site> execute smart_app.item_uom_migration.set_all_items_to_kg
+```
+
+Updates `stock_uom` (Item's actual Default Unit of Measure) plus
+`purchase_uom`/`sales_uom` wherever either override is set to something
+other than Kg (a populated override would otherwise keep transacting in
+the old unit even after `stock_uom` itself is fixed; a blank one already
+means "use stock_uom" and is left alone).
+
+**Items with existing Stock Ledger Entries are skipped, not forced** — the
+same guard core ERPNext itself applies (`Item.validate()` normally refuses
+to change `stock_uom` once stock has actually moved for that Item, since
+every past transaction's quantity was recorded against the *old* unit;
+forcing it now would make historical stock reports silently misreport old
+quantities as Kg with no real conversion applied). Skipped Items are
+listed by name in the printed summary for manual review — correcting one
+generally means a fresh Item plus a Stock Reconciliation, not something
+this script decides on its own. Every other Item goes through the normal
+`doc.save()`, not a raw SQL/`db.set_value` bypass, so Frappe's own
+UOM-conversion recompute and any other Item validation still runs.
+
 ## Roadmap
 
 - Phase 3: commission automation for Marketers based on converted Inquiries.
