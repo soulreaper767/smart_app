@@ -274,6 +274,7 @@ def setup():
 	run_step(setup_item_variant_dropdowns, "pharmacopeia/grade as editable dropdowns everywhere")
 	run_step(setup_item_supplier_customization, "multi-supplier management on Item (type/preferred)")
 	run_step(setup_test_users, "test users")
+	run_step(backfill_test_user_roles, "backfill test user roles")
 	run_step(backfill_commercial_manager_inquiry_user_role, "backfill Inquiry User role for Commercial Manager")
 	run_step(backfill_commercial_status, "backfill blank/stuck commercial_status on existing Inquiries")
 	run_step(backfill_party_price_lists, "backfill default Price Lists for existing Customers/Suppliers")
@@ -2928,6 +2929,25 @@ def setup_test_users():
 		user.flags.ignore_password_policy = True
 		user.append("roles", {"role": u["role"]})
 		user.insert(ignore_permissions=True)
+
+
+def backfill_test_user_roles():
+	"""setup_test_users only assigns a TEST_USERS entry's role at creation
+	time -- `if frappe.db.exists("User", u["email"]): continue` skips
+	straight past one that already exists, so a test user created on an
+	older migrate, or one that had its role edited/removed by hand from
+	Desk, never gets its designated role back automatically. Re-asserts it
+	on every migrate instead -- the new rights every role in this app picks
+	up (e.g. Commercial Officer/Manager's Purchase Order + Supplier
+	Comparative Statement access) are only real for these test accounts if
+	they still actually hold the role that grants them."""
+	for u in TEST_USERS:
+		if not frappe.db.exists("User", u["email"]):
+			continue
+		user = frappe.get_doc("User", u["email"])
+		if u["role"] not in [r.role for r in user.roles]:
+			user.append("roles", {"role": u["role"]})
+			user.save(ignore_permissions=True)
 
 
 def backfill_commercial_manager_inquiry_user_role():
