@@ -34,6 +34,8 @@ COMMERCIAL_CARD_NAMES = [
 	"Total Suppliers",
 	"Open Indents",
 	"Outstanding Commission",
+	"Pending Comparative Statements",
+	"Open Purchase Orders",
 ]
 
 # Commercial-side Dashboard Charts (not Inquiry-based, so built separately from
@@ -41,6 +43,8 @@ COMMERCIAL_CARD_NAMES = [
 COMMERCIAL_CHART_NAMES = [
 	"Suppliers by Country",
 	"Indents by Status",
+	"Purchase Orders by Status",
+	"Commission Invoices by Status",
 ]
 
 COMMERCIAL_STATUSES = ["Unassigned", "Assigned", "Quotation Created", "RFQ Created", "RFQ Sent"]
@@ -831,9 +835,11 @@ def setup_dashboard_charts():
 
 
 def setup_commercial_charts():
-	"""Commercial-side charts -- currently just a breakdown of the supplier
-	master (see smart_app.supplier_import) by country. Kept separate from
-	setup_dashboard_charts because these are not Inquiry-based (no
+	"""Commercial-side charts: a breakdown of the supplier master (see
+	smart_app.supplier_import) by country, plus a status-breakdown donut for
+	every buying/revenue doctype the Commercial team works (Indent,
+	Purchase Order, Commission Invoice). Kept separate from
+	setup_dashboard_charts because none of these are Inquiry-based (no
 	`based_on` date field), so they'd need special-casing in that loop."""
 	if not frappe.db.exists("DocType", "Supplier"):
 		return
@@ -863,6 +869,43 @@ def setup_commercial_charts():
 		indent_chart.is_public = 1
 		indent_chart.module = MODULE
 		indent_chart.insert(ignore_permissions=True)
+
+	# Purchase Order is core ERPNext, not this app's own doctype, but the
+	# Commercial team now raises these directly from the Comparative
+	# Statement gate on Quotation (see supplier_comparative_statement.py) --
+	# worth the same at-a-glance status breakdown Indent gets above.
+	if frappe.db.exists("DocType", "Purchase Order") and not frappe.db.exists(
+		"Dashboard Chart", "Purchase Orders by Status"
+	):
+		po_chart = frappe.new_doc("Dashboard Chart")
+		po_chart.chart_name = "Purchase Orders by Status"
+		po_chart.chart_type = "Group By"
+		po_chart.document_type = "Purchase Order"
+		po_chart.group_by_type = "Count"
+		po_chart.group_by_based_on = "status"
+		po_chart.type = "Donut"
+		po_chart.filters_json = json.dumps([["Purchase Order", "docstatus", "!=", 2]])
+		po_chart.is_public = 1
+		po_chart.module = MODULE
+		po_chart.insert(ignore_permissions=True)
+
+	# This app's own real revenue doctype -- Outstanding Commission (the
+	# number card above) is the total still owed; this is the same data
+	# broken down by where each one actually is in its own lifecycle.
+	if frappe.db.exists("DocType", "Commission Invoice") and not frappe.db.exists(
+		"Dashboard Chart", "Commission Invoices by Status"
+	):
+		ci_chart = frappe.new_doc("Dashboard Chart")
+		ci_chart.chart_name = "Commission Invoices by Status"
+		ci_chart.chart_type = "Group By"
+		ci_chart.document_type = "Commission Invoice"
+		ci_chart.group_by_type = "Count"
+		ci_chart.group_by_based_on = "commission_status"
+		ci_chart.type = "Donut"
+		ci_chart.filters_json = json.dumps([["Commission Invoice", "docstatus", "!=", 2]])
+		ci_chart.is_public = 1
+		ci_chart.module = MODULE
+		ci_chart.insert(ignore_permissions=True)
 
 
 # ---------------------------------------------------------------------------
@@ -960,6 +1003,29 @@ def setup_commercial_overview():
 			aggregate_function_based_on="outstanding_amount",
 			document_type="Commission Invoice",
 		)
+	# Draft Comparative Statements still waiting on a winning Supplier
+	# selection per item -- the queue blocking Quotation's own "Create >
+	# Purchase Order"/"Create > Indent" buttons (see
+	# supplier_comparative_statement.py) from being usable yet.
+	if frappe.db.exists("DocType", "Supplier Comparative Statement"):
+		_create_number_card(
+			"Pending Comparative Statements",
+			"Count",
+			[["Supplier Comparative Statement", "docstatus", "=", 0]],
+			document_type="Supplier Comparative Statement",
+		)
+	# Submitted Purchase Orders not yet fully received/billed -- the
+	# buying-side counterpart to Open Indents above.
+	if frappe.db.exists("DocType", "Purchase Order"):
+		_create_number_card(
+			"Open Purchase Orders",
+			"Count",
+			[
+				["Purchase Order", "docstatus", "=", 1],
+				["Purchase Order", "status", "not in", ["Completed", "Closed"]],
+			],
+			document_type="Purchase Order",
+		)
 
 	# Only submitted Inquiries belong on this board -- otherwise every draft
 	# (still "Unassigned" by default before it's even handed to Commercial)
@@ -1019,9 +1085,11 @@ def setup_dashboard():
 
 
 def setup_commercial_dashboard():
-	"""A Commercial-team counterpart to the Inquiry Dashboard: the three
-	submitted/assigned/unassigned KPIs, the supplier-master count, and the
-	Suppliers-by-Country chart, on one page linked from the workspace's
+	"""A Commercial-team counterpart to the Inquiry Dashboard: every KPI in
+	COMMERCIAL_CARD_NAMES (submitted/assigned/unassigned Inquiries, supplier
+	count, open Indents, outstanding commission, pending Comparative
+	Statements, open Purchase Orders) and every chart in
+	COMMERCIAL_CHART_NAMES, on one page linked from the workspace's
 	Commercial Team section."""
 	if frappe.db.exists("Dashboard", "Commercial Dashboard"):
 		return

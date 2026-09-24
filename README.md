@@ -292,22 +292,41 @@ Profile it didn't set itself.
 
 ## Workspace shortcuts & links
 
-The **Smart App** workspace ships with:
-- **Shortcuts** (the row of buttons at the top): New Inquiry, Inquiry List,
+The **Smart App** workspace ships with, top to bottom:
+- **Shortcuts** (`SHORTCUTS` in `install.py`): New Inquiry, Inquiry List,
   Inquiry Kanban, Inquiry Report view, Inquiry Dashboard, both Query Reports
   (Marketer Performance, Inquiry Status Summary), Customers, the Inquiry
   Workflow, and all four master lists.
-- **Links** (the classic ERPNext grouped-card section further down the
-  page, `LINK_CARDS` in `install.py`): every doctype and report the app
-  ships with, organised into **Inquiry** (the Inquiry doctype itself),
-  **Masters** (all four master lists), **Commercial** (Supplier, Quotation,
-  Request for Quotation, Supplier Quotation), and **Reports** (both Query
-  Reports) cards.
-- A **Commercial Team** section: the Commercial Pipeline Kanban (filtered to
-  submitted Inquiries only), the Commercial Assignment Overview report, the
-  **Suppliers** list, Quotation/Request for Quotation/Supplier Quotation
-  lists, the **Commercial Dashboard**, and the two core
-  purchase-history/comparison reports (see Phase 2 below).
+- **Key Numbers** — every Number Card in `CARD_NAMES` (Inquiry-side: Open/
+  Converted/Lost Inquiries) plus `COMMERCIAL_CARD_NAMES` (Commercial-side:
+  Submitted/Unassigned/Assigned Inquiries, Total Suppliers, Open Indents,
+  Outstanding Commission, **Pending Comparative Statements**, **Open
+  Purchase Orders**).
+- **Charts** — every Dashboard Chart in `CHART_NAMES` (Inquiry-side) plus
+  `COMMERCIAL_CHART_NAMES`: Suppliers by Country, Indents by Status,
+  **Purchase Orders by Status**, **Commission Invoices by Status**.
+- **Links** (the classic ERPNext grouped-card section, `LINK_CARDS` in
+  `install.py`): every doctype and report the app ships with, organised
+  into **Inquiry**, **Masters** (all master lists), **Commercial**
+  (Supplier, Quotation, Request for Quotation, Supplier Quotation,
+  **Supplier Comparative Statement**, **Purchase Order**, Sales Order,
+  Sales Invoice, Indent, Commission Invoice), and **Reports** cards.
+- A **Commercial Team** section (`COMMERCIAL_SHORTCUTS`): the Commercial
+  Pipeline Kanban (filtered to submitted Inquiries only), the Commercial
+  Assignment Overview report, Suppliers/Quotations/Requests for Quotation/
+  Supplier Quotations/**Supplier Comparative Statements**/**Purchase
+  Orders**/Sales Orders/Sales Invoices/Indents/Commission Invoices lists,
+  the Indent Register and Commission Register reports, the **Commercial
+  Dashboard**, and the two core purchase-history/comparison reports (see
+  Phase 2 below).
+
+Both `_add_workspace_visuals` (Key Numbers + Charts) and
+`_add_commercial_section` (Commercial Team shortcuts) pull straight from
+`CARD_NAMES`/`COMMERCIAL_CARD_NAMES`/`CHART_NAMES`/`COMMERCIAL_CHART_NAMES`/
+`COMMERCIAL_SHORTCUTS` — the standing rule for every doctype this app adds
+going forward is to add it to whichever of those lists fits (and to
+`LINK_CARDS` for the Links section), never to leave a new doctype
+reachable only by typing its name into the search bar.
 
 Every `content.append()` that builds these blocks is guarded by
 `_has_content_block` — checking whether that exact header/shortcut/chart/
