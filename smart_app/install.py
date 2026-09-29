@@ -420,12 +420,30 @@ def grant_commercial_access():
 		"Terms and Conditions",
 		"Address",
 		"User",  # Commercial Manager needs this to search for a Commercial Officer to assign
+		# Every one of these is read internally by BuyingController/
+		# SellingController's own set_missing_values/get_party_details
+		# (core ERPNext) the moment a Purchase Order/Sales Order is built or
+		# saved -- e.g. Warehouse via the Item's default warehouse, Cost
+		# Center/Mode of Payment/Payment Terms Template via Company
+		# defaults. None of these were ever granted before, so a Commercial
+		# Officer with otherwise-correct Purchase Order/Sales Order rights
+		# could still hit a permission error on one of these as a side
+		# effect of a core method they never call directly.
+		"Warehouse",
+		"Cost Center",
+		"Mode of Payment",
+		"Payment Terms Template",
+		"Shipping Rule",
 	)
 	for role in ("Commercial Officer", "Commercial Manager"):
 		for doctype in reference_data:
 			_grant_custom_docperm(doctype, role, select=1, read=1)
 
-		_grant_custom_docperm("Supplier", role, select=1, read=1)
+		# create+write, not just select+read -- sourcing routinely turns up
+		# a supplier not yet on file, and neither role could add one before
+		# this (both were select+read only), a real bottleneck for a
+		# trading business whose whole buying pipeline runs on this list.
+		_grant_custom_docperm("Supplier", role, select=1, read=1, write=1, create=1, print=1, export=1, report=1)
 
 		# Multi-price management (see ensure_default_price_list /
 		# sync_item_prices_from_* in utils.py): the automatic sync itself
@@ -437,8 +455,12 @@ def grant_commercial_access():
 				doctype, role, select=1, read=1, write=1, create=1, report=1, export=1,
 			)
 
-		# Commercial Officer generates these; Commercial Manager gets the
-		# same access for oversight (reassigning, reviewing, following up).
+		# Commercial Officer generates and submits these; Commercial Manager
+		# gets everything Officer does PLUS cancel/amend/delete, for
+		# oversight -- correcting a wrongly-raised document is a Manager-
+		# level action, matching the tiered create-vs-correct split Indent's
+		# own doctype permissions already use (its JSON grants Commercial
+		# Manager amend+cancel+delete, Officer only amend+create+submit).
 		# Sales Order / Sales Invoice are the parallel direct-sale pipeline
 		# (Inquiry -> Quotation -> Sales Order -> Sales Invoice) this same
 		# team runs alongside the buying side (paperwork only -- see the
@@ -453,7 +475,18 @@ def grant_commercial_access():
 		# Comparative Statement -> Purchase Order/Indent, see
 		# supplier_comparative_statement.py) -- full create/write/submit,
 		# not just select+read, since the Commercial team is the one who
-		# actually raises and submits both from those buttons.
+		# actually raises and submits both from those buttons. Supplier
+		# Quotation needs submit=1 too: a Commercial Officer can log a
+		# phone/email supplier reply manually instead of via the RFQ portal,
+		# and _get_rfq_quotation_rates (supplier_comparative_statement.py)
+		# only ever reads docstatus=1 rows -- create-but-can't-submit would
+		# mean that manually-logged reply never reaches the Comparative
+		# Statement at all.
+		perms = dict(
+			select=1, read=1, write=1, create=1, submit=1, print=1, email=1, report=1, export=1,
+		)
+		if role == "Commercial Manager":
+			perms.update(cancel=1, amend=1, delete=1)
 		for doctype in (
 			"Quotation",
 			"Request for Quotation",
@@ -462,18 +495,9 @@ def grant_commercial_access():
 			"Payment Entry",
 			"Purchase Order",
 			"Supplier Comparative Statement",
+			"Supplier Quotation",
 		):
-			_grant_custom_docperm(
-				doctype, role, select=1, read=1, write=1, create=1, submit=1, print=1, email=1,
-				report=1, export=1,
-			)
-
-		# Supplier replies are usually submitted via the RFQ portal, but a
-		# Commercial Officer can also log a phone/email reply manually.
-		_grant_custom_docperm(
-			"Supplier Quotation", role, select=1, read=1, write=1, create=1, print=1, email=1,
-			report=1, export=1,
-		)
+			_grant_custom_docperm(doctype, role, **perms)
 
 	_grant_core_report_access()
 

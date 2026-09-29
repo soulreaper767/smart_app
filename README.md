@@ -338,6 +338,36 @@ migrate cleans up any duplication a site already accumulated.
 
 ## Commercial team roles & permissions
 
+**`grant_commercial_access` (install.py) is the single source of truth for
+what Commercial Officer/Manager can touch** — reconciled on every migrate,
+so widening or narrowing anything here self-heals rather than staying stuck
+at whatever was granted the first time. As of this audit:
+
+- **Reference data** (select+read only): Item, Company, Currency, Customer,
+  Contact, UOM, both Tax Templates, Terms and Conditions, Address, User,
+  **Warehouse, Cost Center, Mode of Payment, Payment Terms Template,
+  Shipping Rule** — that last group exists purely because core ERPNext's
+  own `BuyingController`/`SellingController.set_missing_values` reads them
+  internally the moment a Purchase Order/Sales Order is built, even though
+  neither role ever opens those doctypes directly; missing any one of them
+  surfaced as a permission error on an unrelated-looking action.
+- **Supplier**: select+read+write+create — both roles can add a new
+  Supplier directly now, not just browse the existing list (sourcing
+  routinely turns up one not yet on file).
+- **Price List / Item Price**: select+read+write+create, for browsing/
+  adjusting the auto-maintained per-party price lists.
+- **Quotation, Request for Quotation, Sales Order, Sales Invoice, Payment
+  Entry, Purchase Order, Supplier Comparative Statement, Supplier
+  Quotation**: select+read+write+create+submit for **both** roles;
+  Commercial Manager additionally gets **cancel+amend+delete**, for
+  correcting a wrongly-raised document — the same create-vs-correct split
+  Indent's own doctype permissions already use natively. Supplier
+  Quotation specifically needs `submit` (not just create): a Commercial
+  Officer can log a phone/email supplier reply manually instead of via the
+  RFQ portal, and the Comparative Statement's rate-fetch only ever reads
+  **submitted** Supplier Quotations — create-but-can't-submit meant that
+  manually-logged reply could never actually reach it.
+
 - **Commercial Manager** — reads/writes every **submitted** Inquiry (not
   scoped to any one officer), so they can see totals and assign
   `commercial_officer`; drafts are invisible to them entirely (see below).
