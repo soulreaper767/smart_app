@@ -24,6 +24,8 @@ fixtures = [
 					"Inquiry User",
 					"Commercial Manager",
 					"Commercial Officer",
+					"Logistic Manager",
+					"Logistic Officer",
 				],
 			]
 		],

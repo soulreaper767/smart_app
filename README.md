@@ -1107,6 +1107,83 @@ Sales Invoices, Indents, and the Indent Register report; a "Commercial"
 Links card entry; a new **Commercial Dashboard** chart ("Indents by
 Status") and Number Card ("Open Indents" — submitted, not yet Closed).
 
+## Stage E: Logistics (Shipment)
+
+A third, further-downstream team picks up from here — **Logistic Manager**
+and **Logistic Officer** — covering everything between a submitted Indent
+and the goods actually arriving: region assignment, Bank Contract/LC/TT,
+Form 5, the shipment plan, shipment documents, Airway Bill/BL, the NOC
+from DRAP, DHL tracking and arrival, and the payment swift. This sits
+between Stage D (Purchase Order and Indent) and Stage F (Commission
+Billing and Collection) in the client-facing process walkthrough, and —
+unlike Commission Invoice — is not itself part of the revenue chain; it's
+operational tracking.
+
+### Doctype: Shipment
+
+Smart App's own doctype (naming series `SHP-.YYYY.-.MM.-.####.`, **not**
+submittable — this is a progressive checklist filled in over days/weeks by
+Logistic Officer, not a point-in-time financial document with its own
+draft/submit/cancel lifecycle):
+
+- **Source.** Built from a submitted **Indent** — "Create → Shipment"
+  button on Indent (`indent.js`), calling `create_shipment_from_indent`
+  (`shipment.py`). Left unassigned (no reverse "Get Items From" button —
+  there's no useful blank-form-first entry point here the way Indent/
+  Commission Invoice have, since a Shipment only ever makes sense against
+  one specific already-submitted Indent).
+- **Region & Assignment** (step 12, "assignment of region-wise
+  shipments"). `region` (Link → **Shipment Region**, a small
+  Logistic-Manager-editable master list — `setup_shipment_masters`/
+  `SHIPMENT_REGION_SEED` seeds China/Far East/South Asia/Middle East/
+  Europe/Americas) and `logistic_officer` are both `read_only` on the form
+  — the only supported way to set them is the **Assign**/**Reassign**
+  button (`shipment.js`, Logistic Manager only), calling
+  `assign_logistic_officer` (`shipment.py`). Exactly the same
+  explicit-role-check-plus-`ignore_permissions=True` shape as Inquiry's own
+  `assign_commercial_officer`, for the identical reason documented there:
+  routing a single-field reassignment through Frappe's generic permission
+  stack (`Document.check_permission` → `has_permission` →
+  `get_doc_permissions` → `has_user_permission`) proved unreliable for
+  exactly this kind of action the first time it was tried.
+- **Steps 13–20**, one collapsible section each, mapped field-for-field
+  onto the client-facing process document: Bank Contract/LC/TT (type,
+  reference, received date, attachment, sent-to-supplier flag), Form 5
+  (status + attachment), Shipment Plan (requested/communicated flags +
+  attachment), Shipment Documents (draft/final), Airway Bill/BL
+  (draft/final), DRAP NOC (attachment + received date), DHL & Arrival
+  (tracking no, arrival date, arrival notice attachment, client-intimated
+  flag), and Payment Swift (attachment + sent-to-supplier date).
+- **`shipment_status`** is entirely computed, never hand-edited
+  (`read_only`, default `"Pending Assignment"`) — `Shipment.set_status()`
+  (`validate()`) derives it from which fields are actually filled in
+  (`logistic_officer` set → *Assigned*; any Stage-13–18 field filled →
+  *In Progress*; `shipment_arrival_date` set → *Arrived*;
+  `payment_swift_attachment` set → *Completed*), and only ever moves
+  **forward** — correcting an earlier field later never walks the status
+  back down. Self-healing in the same sense the rest of this app's status
+  fields are: it can never drift out of sync with the real paperwork,
+  because it isn't a separate fact someone has to remember to update.
+
+**Permissions.** Shipment and Shipment Region's own role permissions are
+baked directly into their doctype JSON (System Manager/Logistic Manager
+full access, Logistic Officer create/write but no delete, Commercial
+Manager/Officer read-only for visibility into deals they handed off).
+Indent itself gained a new read-only permission row for both Logistic
+roles — they need buyer/supplier/item context, never edit rights on the
+trade terms. `grant_logistics_access` (`install.py`) grants Logistic
+Manager `select+read` on **User**, the one piece of core reference data
+`get_logistic_officers`/`assign_logistic_officer` needs (same reason
+Commercial Manager needed the identical grant for its own Assign button).
+
+**Surfaced in the workspace**: a new **Logistics Team** section
+(`LOGISTICS_SHORTCUTS` — Shipment Kanban by status, Shipment list,
+Shipment Region masters, Logistics Dashboard), a "Logistics" Links card
+entry, a **Logistics Dashboard** (mirroring the Commercial Dashboard) with
+a "Shipments by Status" chart and "Unassigned Shipments"/"Open Shipments"
+Number Cards, and a **Shipment Status Board** Kanban keyed on
+`shipment_status`.
+
 ## Multi-price management: a dedicated Price List per Customer/Supplier
 
 "Multiple sales and purchase prices for the same item" is entirely native

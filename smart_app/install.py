@@ -47,6 +47,20 @@ COMMERCIAL_CHART_NAMES = [
 	"Commission Invoices by Status",
 ]
 
+# Logistics-side Number Cards / Dashboard Charts -- Shipment (Stage E), same
+# split from COMMERCIAL_CARD_NAMES/COMMERCIAL_CHART_NAMES as the Logistics
+# team itself is split from Commercial.
+LOGISTICS_CARD_NAMES = [
+	"Unassigned Shipments",
+	"Open Shipments",
+]
+
+LOGISTICS_CHART_NAMES = [
+	"Shipments by Status",
+]
+
+SHIPMENT_STATUSES = ["Pending Assignment", "Assigned", "In Progress", "Arrived", "Completed"]
+
 COMMERCIAL_STATUSES = ["Unassigned", "Assigned", "Quotation Created", "RFQ Created", "RFQ Sent"]
 
 WORKFLOW_ACTIONS = [
@@ -237,6 +251,42 @@ COMMERCIAL_SHORTCUTS = [
 	},
 ]
 
+# Logistics team (Logistic Manager / Logistic Officer): Stage E of the
+# trading desk process (see shipment.py) -- picks up a submitted Indent's
+# Shipment, assigns a region/officer, and tracks BC/LC/TT through to the
+# payment swift. Separate section from COMMERCIAL_SHORTCUTS since it's a
+# distinct downstream team (same split as Commercial itself from Inquiry).
+LOGISTICS_SHORTCUTS = [
+	{
+		"label": "Shipments",
+		"type": "DocType",
+		"link_to": "Shipment",
+		"doc_view": "Kanban",
+		"kanban_board": "Shipment Status Board",
+		"color": "#0EA5E9",
+	},
+	{
+		"label": "Shipment List",
+		"type": "DocType",
+		"link_to": "Shipment",
+		"doc_view": "List",
+		"color": "#0EA5E9",
+	},
+	{
+		"label": "Shipment Regions",
+		"type": "DocType",
+		"link_to": "Shipment Region",
+		"doc_view": "List",
+		"color": "#94A3B8",
+	},
+	{
+		"label": "Logistics Dashboard",
+		"type": "Dashboard",
+		"link_to": "Logistics Dashboard",
+		"color": "#F97316",
+	},
+]
+
 
 def after_install():
 	setup()
@@ -251,19 +301,25 @@ def setup():
 	run_step(ensure_roles, "roles")
 	run_step(grant_master_data_access, "customer/item/employee access")
 	run_step(grant_commercial_access, "commercial team access")
+	run_step(grant_logistics_access, "logistics team access")
 	run_step(seed_master_data, "master data")
 	run_step(setup_indent_masters, "indent trade term master data")
+	run_step(setup_shipment_masters, "shipment region master data")
 	run_step(setup_supplier_bank_fields, "supplier bank detail fields (for Indent)")
 	run_step(setup_customer_marketer_field, "customer marketer field")
 	run_step(setup_commission_billing_field, "commission billing field (customer represents supplier)")
 	run_step(setup_workflow, "workflow")
 	run_step(setup_kanban_board, "kanban board")
+	run_step(setup_shipment_kanban, "shipment kanban board")
 	run_step(setup_dashboard_charts, "dashboard charts")
 	run_step(setup_commercial_charts, "commercial dashboard charts (suppliers, indents)")
+	run_step(setup_logistics_charts, "logistics dashboard charts (shipments)")
 	run_step(setup_number_cards, "number cards")
 	run_step(setup_commercial_overview, "commercial overview (cards + kanban + report)")
+	run_step(setup_logistics_overview, "logistics overview (cards)")
 	run_step(setup_dashboard, "dashboard")
 	run_step(setup_commercial_dashboard, "commercial dashboard")
+	run_step(setup_logistics_dashboard, "logistics dashboard")
 	run_step(setup_reports, "reports")
 	run_step(setup_print_format, "print format")
 	run_step(setup_indent_print_format, "indent print format")
@@ -319,6 +375,11 @@ def ensure_roles():
 	# they only ever see Inquiries once submitted (see Inquiry's permissions
 	# and utils.sync_commercial_officer_user_permission), so they're
 	# deliberately NOT part of the Inquiry-role set above.
+	#
+	# Logistic Manager / Logistic Officer are a third, further-downstream
+	# team: Stage E of the trading desk process (see shipment.py) -- they
+	# only ever see an Indent once it's submitted (read-only, see its own
+	# doctype permissions), and own the Shipment record from there.
 	for role in (
 		"Inquiry Manager",
 		"Inquiry Officer",
@@ -326,6 +387,8 @@ def ensure_roles():
 		"Inquiry User",
 		"Commercial Manager",
 		"Commercial Officer",
+		"Logistic Manager",
+		"Logistic Officer",
 	):
 		if not frappe.db.exists("Role", role):
 			frappe.get_doc({"doctype": "Role", "role_name": role, "desk_access": 1}).insert(
@@ -523,6 +586,26 @@ def _grant_core_report_access():
 
 
 # ---------------------------------------------------------------------------
+# Logistic Manager / Logistic Officer: Stage E of the trading desk process
+# (see shipment.py) -- region assignment, BC/LC/TT, Form 5, shipment plan/
+# documents, Airway Bill, DRAP NOC, DHL arrival, payment swift. Shipment and
+# Shipment Region are this app's own doctypes, so their actual role
+# permissions are baked straight into their own doctype JSON (same
+# convention as Indent/Commission Invoice); the only thing granted here is
+# access to a core reference doctype this app doesn't own.
+# ---------------------------------------------------------------------------
+
+
+def grant_logistics_access():
+	# Logistic Manager needs to search Users by role when assigning a
+	# Logistic Officer (see get_logistic_officers/assign_logistic_officer,
+	# shipment.py) -- the custom link-query function alone isn't enough;
+	# Commercial Manager needed the same explicit grant for the identical
+	# reason (assign_commercial_officer).
+	_grant_custom_docperm("User", "Logistic Manager", select=1, read=1)
+
+
+# ---------------------------------------------------------------------------
 # Retired artifacts: estimated_value/currency were removed from Inquiry, so
 # the chart/card built on them are cleaned up too. Safe to run every
 # migrate — becomes a no-op once cleaned up on a given site.
@@ -671,6 +754,27 @@ def setup_indent_masters():
 
 
 # ---------------------------------------------------------------------------
+# Shipment Region: the manager-editable master list backing Shipment's own
+# `region` field (step 12, "assignment of region wise shipments") -- same
+# shape as Indent Trade Term above, edited by Logistic Manager from its own
+# list view rather than a fixed Select, so a new sourcing region doesn't
+# need a code change.
+# ---------------------------------------------------------------------------
+
+SHIPMENT_REGION_SEED = ["China", "Far East", "South Asia", "Middle East", "Europe", "Americas"]
+
+
+def setup_shipment_masters():
+	if not frappe.db.exists("DocType", "Shipment Region"):
+		return
+	for region_name in SHIPMENT_REGION_SEED:
+		if not frappe.db.exists("Shipment Region", region_name):
+			frappe.get_doc({"doctype": "Shipment Region", "region_name": region_name}).insert(
+				ignore_permissions=True
+			)
+
+
+# ---------------------------------------------------------------------------
 # Workflow
 # ---------------------------------------------------------------------------
 
@@ -808,6 +912,21 @@ def setup_kanban_board():
 	board.insert(ignore_permissions=True)
 
 
+def setup_shipment_kanban():
+	if not frappe.db.exists("DocType", "Shipment") or frappe.db.exists(
+		"Kanban Board", "Shipment Status Board"
+	):
+		return
+
+	board = frappe.new_doc("Kanban Board")
+	board.kanban_board_name = "Shipment Status Board"
+	board.reference_doctype = "Shipment"
+	board.field_name = "shipment_status"
+	for status in SHIPMENT_STATUSES:
+		board.append("columns", {"column_name": status})
+	board.insert(ignore_permissions=True)
+
+
 # ---------------------------------------------------------------------------
 # Dashboard Charts
 # ---------------------------------------------------------------------------
@@ -930,6 +1049,26 @@ def setup_commercial_charts():
 		ci_chart.is_public = 1
 		ci_chart.module = MODULE
 		ci_chart.insert(ignore_permissions=True)
+
+
+def setup_logistics_charts():
+	"""Logistics-side counterpart to setup_commercial_charts -- a single
+	status-breakdown donut for Shipment (Stage E), same shape as Indent/
+	Purchase Order/Commission Invoice's own charts above."""
+	if not frappe.db.exists("DocType", "Shipment") or frappe.db.exists(
+		"Dashboard Chart", "Shipments by Status"
+	):
+		return
+	chart = frappe.new_doc("Dashboard Chart")
+	chart.chart_name = "Shipments by Status"
+	chart.chart_type = "Group By"
+	chart.document_type = "Shipment"
+	chart.group_by_type = "Count"
+	chart.group_by_based_on = "shipment_status"
+	chart.type = "Donut"
+	chart.is_public = 1
+	chart.module = MODULE
+	chart.insert(ignore_permissions=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1088,6 +1227,26 @@ def setup_commercial_overview():
 	)
 
 
+def setup_logistics_overview():
+	"""Logistics-side counterpart to setup_commercial_overview -- the two
+	KPIs a Logistic Manager actually needs at a glance: how many Shipments
+	are still waiting on a region/officer, and how many are open at all."""
+	if not frappe.db.exists("DocType", "Shipment"):
+		return
+	_create_number_card(
+		"Unassigned Shipments",
+		"Count",
+		[["Shipment", "logistic_officer", "is", "not set"]],
+		document_type="Shipment",
+	)
+	_create_number_card(
+		"Open Shipments",
+		"Count",
+		[["Shipment", "shipment_status", "!=", "Completed"]],
+		document_type="Shipment",
+	)
+
+
 # ---------------------------------------------------------------------------
 # Dashboard
 # ---------------------------------------------------------------------------
@@ -1126,6 +1285,26 @@ def setup_commercial_dashboard():
 		if frappe.db.exists("Dashboard Chart", chart):
 			dashboard.append("charts", {"chart": chart})
 	for card in COMMERCIAL_CARD_NAMES:
+		if frappe.db.exists("Number Card", card):
+			dashboard.append("cards", {"card": card})
+	dashboard.insert(ignore_permissions=True)
+
+
+def setup_logistics_dashboard():
+	"""A Logistics-team counterpart to the Commercial Dashboard: every KPI
+	in LOGISTICS_CARD_NAMES and every chart in LOGISTICS_CHART_NAMES, on one
+	page linked from the workspace's Logistics Team section."""
+	if frappe.db.exists("Dashboard", "Logistics Dashboard"):
+		return
+
+	dashboard = frappe.new_doc("Dashboard")
+	dashboard.dashboard_name = "Logistics Dashboard"
+	dashboard.module = MODULE
+	dashboard.is_default = 0
+	for chart in LOGISTICS_CHART_NAMES:
+		if frappe.db.exists("Dashboard Chart", chart):
+			dashboard.append("charts", {"chart": chart})
+	for card in LOGISTICS_CARD_NAMES:
 		if frappe.db.exists("Number Card", card):
 			dashboard.append("cards", {"card": card})
 	dashboard.insert(ignore_permissions=True)
@@ -2594,6 +2773,7 @@ LINK_CARDS = [
 			{"label": "Inquiry Incoterm", "link_type": "DocType", "link_to": "Inquiry Incoterm"},
 			{"label": "Inquiry Category", "link_type": "DocType", "link_to": "Inquiry Category"},
 			{"label": "Indent Trade Term", "link_type": "DocType", "link_to": "Indent Trade Term"},
+			{"label": "Shipment Region", "link_type": "DocType", "link_to": "Shipment Region"},
 		],
 	},
 	{
@@ -2614,6 +2794,13 @@ LINK_CARDS = [
 			{"label": "Sales Invoice", "link_type": "DocType", "link_to": "Sales Invoice"},
 			{"label": "Indent", "link_type": "DocType", "link_to": "Indent"},
 			{"label": "Commission Invoice", "link_type": "DocType", "link_to": "Commission Invoice"},
+		],
+	},
+	{
+		"label": "Logistics",
+		"icon": "list",
+		"links": [
+			{"label": "Shipment", "link_type": "DocType", "link_to": "Shipment"},
 		],
 	},
 	{
@@ -2646,6 +2833,7 @@ def setup_workspace():
 	_add_workspace_visuals(workspace)
 	_add_workspace_links(workspace)
 	_add_commercial_section(workspace)
+	_add_logistics_section(workspace)
 
 
 def _build_base_workspace():
@@ -2747,7 +2935,7 @@ def _add_workspace_visuals(workspace):
 		content.append(
 			{"id": frappe.generate_hash(length=10), "type": "header", "data": {"text": key_numbers_header, "col": 12}}
 		)
-	for card in CARD_NAMES + COMMERCIAL_CARD_NAMES:
+	for card in CARD_NAMES + COMMERCIAL_CARD_NAMES + LOGISTICS_CARD_NAMES:
 		if card not in existing_cards:
 			workspace.append("number_cards", {"number_card_name": card, "label": card})
 		if not _has_content_block(content, "number_card", number_card_name=card):
@@ -2764,7 +2952,7 @@ def _add_workspace_visuals(workspace):
 		content.append(
 			{"id": frappe.generate_hash(length=10), "type": "header", "data": {"text": charts_header, "col": 12}}
 		)
-	for chart in CHART_NAMES + COMMERCIAL_CHART_NAMES:
+	for chart in CHART_NAMES + COMMERCIAL_CHART_NAMES + LOGISTICS_CHART_NAMES:
 		if chart not in existing_charts:
 			workspace.append("charts", {"chart_name": chart, "label": chart})
 		if not _has_content_block(content, "chart", chart_name=chart):
@@ -2851,6 +3039,42 @@ def _add_commercial_section(workspace):
 		)
 
 	for s in COMMERCIAL_SHORTCUTS:
+		if s["label"] not in existing_shortcuts:
+			workspace.append("shortcuts", s)
+			content.append(
+				{
+					"id": frappe.generate_hash(length=10),
+					"type": "shortcut",
+					"data": {"shortcut_name": s["label"], "col": 3},
+				}
+			)
+
+	workspace.content = json.dumps(content)
+	workspace.save(ignore_permissions=True)
+
+
+def _add_logistics_section(workspace):
+	"""Shortcuts for the Logistics team's Stage E pipeline: the Shipment
+	Kanban/list, the Shipment Region master list, and the Logistics
+	Dashboard. Same idempotent "add if missing" pattern as
+	_add_commercial_section."""
+	if not frappe.db.exists("DocType", "Shipment"):
+		return
+
+	workspace.reload()
+	content = _dedupe_content_blocks(json.loads(workspace.content or "[]"))
+	existing_shortcuts = {row.label for row in workspace.get("shortcuts")}
+
+	if not any(b.get("type") == "header" and "Logistics Team" in b.get("data", {}).get("text", "") for b in content):
+		content.append(
+			{
+				"id": frappe.generate_hash(length=10),
+				"type": "header",
+				"data": {"text": '<span class="h5">Logistics Team</span>', "col": 12},
+			}
+		)
+
+	for s in LOGISTICS_SHORTCUTS:
 		if s["label"] not in existing_shortcuts:
 			workspace.append("shortcuts", s)
 			content.append(
@@ -2997,6 +3221,16 @@ TEST_USERS = [
 		"email": "inquirymanager@smartchem.com",
 		"full_name": "Inquiry Manager (Test)",
 		"role": "Inquiry Manager",
+	},
+	{
+		"email": "logisticmanager@smartchem.com",
+		"full_name": "Logistic Manager (Test)",
+		"role": "Logistic Manager",
+	},
+	{
+		"email": "logisticofficer@smartchem.com",
+		"full_name": "Logistic Officer (Test)",
+		"role": "Logistic Officer",
 	},
 ]
 

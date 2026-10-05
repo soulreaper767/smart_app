@@ -1,0 +1,385 @@
+{
+ "actions": [],
+ "autoname": "naming_series:",
+ "creation": "2026-10-05 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "shipment_date",
+  "shipment_status",
+  "column_break_header",
+  "indent",
+  "customer_name",
+  "supplier_name",
+  "section_break_assignment",
+  "region",
+  "logistic_officer",
+  "section_break_bc",
+  "bc_lc_tt_type",
+  "bc_lc_tt_reference",
+  "bc_received_date",
+  "column_break_bc",
+  "bc_attachment",
+  "bc_sent_to_supplier",
+  "section_break_form5",
+  "form5_status",
+  "form5_attachment",
+  "section_break_plan",
+  "shipment_plan_requested",
+  "shipment_plan_attachment",
+  "shipment_plan_communicated",
+  "section_break_docs",
+  "shipment_documents_draft",
+  "shipment_documents_final",
+  "column_break_docs",
+  "awb_bl_draft",
+  "awb_bl_final",
+  "section_break_drap",
+  "drap_noc_attachment",
+  "drap_noc_received_date",
+  "section_break_arrival",
+  "dhl_tracking_no",
+  "shipment_arrival_date",
+  "column_break_arrival",
+  "arrival_notice_attachment",
+  "client_intimated",
+  "section_break_swift",
+  "payment_swift_attachment",
+  "swift_sent_to_supplier_date",
+  "section_break_notes",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "no_copy": 1,
+   "options": "SHP-.YYYY.-.MM.-.####.",
+   "print_hide": 1,
+   "reqd": 1
+  },
+  {
+   "default": "Today",
+   "fieldname": "shipment_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Date",
+   "reqd": 1
+  },
+  {
+   "default": "Pending Assignment",
+   "fieldname": "shipment_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Pending Assignment\nAssigned\nIn Progress\nArrived\nCompleted",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_header",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Set once, via \"Create > Shipment\" on a submitted Indent -- the only supported way to populate a Shipment.",
+   "fieldname": "indent",
+   "fieldtype": "Link",
+   "label": "Indent",
+   "options": "Indent",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fetch_from": "indent.customer_name",
+   "fieldname": "customer_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Buyer",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "indent.supplier_name",
+   "fieldname": "supplier_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Seller",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_assignment",
+   "fieldtype": "Section Break",
+   "label": "Region & Assignment"
+  },
+  {
+   "description": "Step 12: assignment of the region-wise shipment -- set via the \"Assign\" button (Logistic Manager only).",
+   "fieldname": "region",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Region",
+   "options": "Shipment Region",
+   "read_only": 1
+  },
+  {
+   "fieldname": "logistic_officer",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Logistic Officer",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_bc",
+   "fieldtype": "Section Break",
+   "label": "Step 13 — Bank Contract / LC / TT"
+  },
+  {
+   "fieldname": "bc_lc_tt_type",
+   "fieldtype": "Select",
+   "label": "Type",
+   "options": "\nBank Contract\nLC\nTT"
+  },
+  {
+   "fieldname": "bc_lc_tt_reference",
+   "fieldtype": "Data",
+   "label": "Reference No"
+  },
+  {
+   "fieldname": "bc_received_date",
+   "fieldtype": "Date",
+   "label": "Received from Client On"
+  },
+  {
+   "fieldname": "column_break_bc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Uploaded and sent to the supplier.",
+   "fieldname": "bc_attachment",
+   "fieldtype": "Attach",
+   "label": "BC / LC / TT Attachment"
+  },
+  {
+   "default": "0",
+   "fieldname": "bc_sent_to_supplier",
+   "fieldtype": "Check",
+   "label": "Sent to Supplier"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_form5",
+   "fieldtype": "Section Break",
+   "label": "Step 14 — Form 5"
+  },
+  {
+   "fieldname": "form5_status",
+   "fieldtype": "Select",
+   "label": "Form 5 Status",
+   "options": "\nAlready Available\nProvisioned"
+  },
+  {
+   "fieldname": "form5_attachment",
+   "fieldtype": "Attach",
+   "label": "Form 5 Attachment"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_plan",
+   "fieldtype": "Section Break",
+   "label": "Step 15 — Shipment Plan"
+  },
+  {
+   "default": "0",
+   "description": "Shipment plan requested from the supplier.",
+   "fieldname": "shipment_plan_requested",
+   "fieldtype": "Check",
+   "label": "Plan Requested from Supplier"
+  },
+  {
+   "fieldname": "shipment_plan_attachment",
+   "fieldtype": "Attach",
+   "label": "Shipment Plan Attachment"
+  },
+  {
+   "default": "0",
+   "description": "Communicated to the marketer / client.",
+   "fieldname": "shipment_plan_communicated",
+   "fieldtype": "Check",
+   "label": "Communicated to Marketer / Client"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_docs",
+   "fieldtype": "Section Break",
+   "label": "Step 16-17 — Shipment Documents & Airway Bill / BL"
+  },
+  {
+   "fieldname": "shipment_documents_draft",
+   "fieldtype": "Attach",
+   "label": "Shipment Documents (Draft)"
+  },
+  {
+   "fieldname": "shipment_documents_final",
+   "fieldtype": "Attach",
+   "label": "Shipment Documents (Final)"
+  },
+  {
+   "fieldname": "column_break_docs",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "awb_bl_draft",
+   "fieldtype": "Attach",
+   "label": "Airway Bill / BL (Draft)"
+  },
+  {
+   "fieldname": "awb_bl_final",
+   "fieldtype": "Attach",
+   "label": "Airway Bill / BL (Final)"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_drap",
+   "fieldtype": "Section Break",
+   "label": "Step 18 — NOC from DRAP"
+  },
+  {
+   "fieldname": "drap_noc_attachment",
+   "fieldtype": "Attach",
+   "label": "DRAP NOC Attachment"
+  },
+  {
+   "fieldname": "drap_noc_received_date",
+   "fieldtype": "Date",
+   "label": "DRAP NOC Received On"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_arrival",
+   "fieldtype": "Section Break",
+   "label": "Step 19 — DHL & Shipment Arrival"
+  },
+  {
+   "fieldname": "dhl_tracking_no",
+   "fieldtype": "Data",
+   "label": "DHL Tracking No"
+  },
+  {
+   "fieldname": "shipment_arrival_date",
+   "fieldtype": "Date",
+   "label": "Shipment Arrival Date"
+  },
+  {
+   "fieldname": "column_break_arrival",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "arrival_notice_attachment",
+   "fieldtype": "Attach",
+   "label": "Arrival Notice Attachment"
+  },
+  {
+   "default": "0",
+   "description": "Arrival notice shared with the client.",
+   "fieldname": "client_intimated",
+   "fieldtype": "Check",
+   "label": "Client Intimated"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_swift",
+   "fieldtype": "Section Break",
+   "label": "Step 20 — Payment Reminder / Swift"
+  },
+  {
+   "description": "Payment swift received from the client, shared with the supplier.",
+   "fieldname": "payment_swift_attachment",
+   "fieldtype": "Attach",
+   "label": "Payment Swift Attachment"
+  },
+  {
+   "fieldname": "swift_sent_to_supplier_date",
+   "fieldtype": "Date",
+   "label": "Swift Sent to Supplier On"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_notes",
+   "fieldtype": "Section Break",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Text",
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "module": "Smart App",
+ "name": "Shipment",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Logistic Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Logistic Officer",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Commercial Manager",
+   "select": 1
+  },
+  {
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Commercial Officer",
+   "select": 1
+  }
+ ],
+ "search_fields": "indent,customer_name,shipment_status",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "indent",
+ "track_changes": 1
+}

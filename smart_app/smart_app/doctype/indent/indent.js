@@ -24,6 +24,7 @@ frappe.ui.form.on("Indent", {
 		frm.trigger("set_status_indicator");
 		frm.trigger("show_get_items_from_quotation_button");
 		frm.trigger("show_create_commission_invoice_button");
+		frm.trigger("show_create_shipment_button");
 	},
 
 	set_status_indicator: function (frm) {
@@ -125,6 +126,33 @@ frappe.ui.form.on("Indent", {
 					callback: function (r) {
 						if (r.message) {
 							frappe.set_route("Form", "Commission Invoice", r.message);
+						}
+					},
+				});
+			},
+			__("Create")
+		);
+	},
+
+	show_create_shipment_button: function (frm) {
+		// Stage E of the trading desk process -- logistics (region
+		// assignment, BC/LC/TT, Form 5, shipment plan/documents, Airway
+		// Bill, DRAP NOC, DHL arrival, payment swift). See
+		// create_shipment_from_indent (shipment.py); left unassigned for
+		// the Logistic Manager to pick up from the Shipment form itself.
+		if (frm.doc.docstatus !== 1 || !frappe.model.can_create("Shipment")) return;
+
+		frm.add_custom_button(
+			__("Shipment"),
+			function () {
+				frappe.call({
+					method: "smart_app.smart_app.doctype.shipment.shipment.create_shipment_from_indent",
+					args: { indent_name: frm.doc.name },
+					freeze: true,
+					freeze_message: __("Preparing Shipment..."),
+					callback: function (r) {
+						if (r.message) {
+							frappe.set_route("Form", "Shipment", r.message);
 						}
 					},
 				});
