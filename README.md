@@ -1523,6 +1523,47 @@ default changes, which is what every *future* transaction reads its
 default UOM from. Existing stock reports/balances are not retroactively
 reinterpreted.
 
+## Full-access grant script (demo/admin accounts)
+
+`smart_app/grant_full_access.py` gives one named, already-existing User
+every role this app defines, so they see and can do everything regardless
+of which team they'd normally belong to — meant for a demo or internal
+admin account, not a real Commercial/Inquiry/Logistic team member who
+should stay scoped to their own role. **Not wired into install.py or a
+patch** — elevating a specific real user's access is a deliberate one-off
+action, never something that should happen silently to every site that
+installs/migrates this app:
+
+```bash
+# preview only, writes nothing:
+bench --site <your-site> execute smart_app.grant_full_access.grant_full_access --kwargs "{'user_email': 'demo@demo.com', 'dry_run': True}"
+bench --site <your-site> execute smart_app.grant_full_access.grant_full_access --kwargs "{'user_email': 'demo@demo.com'}"
+```
+
+"Full access at every level" means two different things in Frappe, and
+this grants both:
+
+1. The **System Manager** role — every doctype's own permissions in this
+   app (and virtually every ERPNext core doctype) already grants System
+   Manager a full create/read/write/delete/submit/cancel/amend row, and
+   this app's own custom permission hooks (Inquiry's
+   `get_permission_query_conditions`/`has_permission`) explicitly exempt
+   System Manager from every restriction they apply to other roles.
+2. **Every role this app itself defines** (Inquiry Manager/Officer,
+   Marketer, Commercial Manager/Officer, Logistic Manager/Officer) —
+   System Manager alone covers document *permissions*, but several of this
+   app's own Client Scripts gate a button's *visibility* on one specific
+   named role directly (Inquiry's and Shipment's own "Assign" buttons
+   check for their respective Manager role by name, not System Manager),
+   not on the underlying doctype permission. Holding every role too is
+   what makes every one of those buttons actually show up, not just the
+   data be technically reachable through search/report views.
+
+Also sets `user_type = "System User"` (Desk access — none of the above
+means anything for a Website User) and `enabled = 1` if either isn't
+already the case. The User must already exist on the site; this never
+creates one.
+
 ## Roadmap
 
 - Phase 3: commission automation for Marketers based on converted Inquiries.
