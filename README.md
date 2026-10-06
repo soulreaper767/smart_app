@@ -1540,8 +1540,8 @@ bench --site <your-site> execute smart_app.grant_full_access.grant_full_access -
 bench --site <your-site> execute smart_app.grant_full_access.grant_full_access --kwargs "{'user_email': 'demo@demo.com'}"
 ```
 
-"Full access at every level" means two different things in Frappe, and
-this grants both:
+"Full access at every level" means three different things in Frappe, and
+this grants all three:
 
 1. The **System Manager** role — every doctype's own permissions in this
    app (and virtually every ERPNext core doctype) already grants System
@@ -1557,7 +1557,33 @@ this grants both:
    check for their respective Manager role by name, not System Manager),
    not on the underlying doctype permission. Holding every role too is
    what makes every one of those buttons actually show up, not just the
-   data be technically reachable through search/report views.
+   data be technically reachable through search/report views. The three
+   Manager-tier roles already cover the highest Permission Level every
+   doctype in this app defines (Inquiry's own Permission-Level-1 contact
+   fields and Permission-Level-2 `inquiry_status`, both Inquiry-Manager-
+   only) — there's no separate "every permission level" step beyond
+   holding these roles.
+3. **No standing User Permission left scoping them to anything** — the
+   one easy to miss. Granting the Commercial Officer role above makes
+   Frappe's own `User.on_update` hook
+   (`sync_commercial_officer_user_permission`, `utils.py`) *immediately
+   create* a User Permission restricting this exact user to only
+   Inquiries linked to themselves — correct behaviour for a real
+   Commercial Officer, who should only see their own deals, but the exact
+   opposite of what a full-access account needs. The same thing happens
+   for the Marketer role if this user is ever linked as a Marketer
+   record's own `user`. **A User Permission applies regardless of role —
+   System Manager does not bypass it** — so every run of this script
+   explicitly deletes any `User Permission` row left pointing at this
+   user, *after* saving the new roles (saving is what (re-)triggers the
+   sync hook, so cleaning up has to happen after, not before, or it would
+   just come straight back). This is what produces errors like "You are
+   not allowed to access this Inquiry ... because it is linked to User
+   'x' in row N, field Y" or "demo@demo.com does not have access to this
+   document" even though every role above is already held — if that
+   happens again later (e.g. someone else re-saves this User's record
+   from Desk, re-triggering the sync hook), re-running this script is the
+   fix.
 
 Also sets `user_type = "System User"` (Desk access — none of the above
 means anything for a Website User) and `enabled = 1` if either isn't
