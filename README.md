@@ -140,7 +140,21 @@ least-privilege:
 | Item | select, read, create (a "New Product Development" Inquiry is often about an item that doesn't exist yet) |
 | Employee | select, read, create, write |
 | Company, Currency, Country, User | select, read |
-| Contact, Address | Inquiry Manager only (select, read) — matches the Permission Level 1 restriction that already hides these fields on the form for the other two roles |
+| Contact, Address | Inquiry Manager only, full select/read/write/create — the Inquiry-Officer/Marketer *exclusion* matches the Permission Level 1 restriction that already hides these fields on the form for those two roles, but Inquiry Manager's own access is **not** read-only (see the bug note just below) |
+
+**"CRM > Address is empty, and I can't add one."** Real bug, not a
+permission boundary anyone intended: `grant_master_data_access` originally
+gave Inquiry Manager only `select+read` on both Contact and Address, and
+`grant_commercial_access` grouped them into its generic read-only
+reference-data loop alongside genuinely static lists like Currency/UOM.
+Net effect: **no role in the entire app ever had `create` on Address or
+Contact** — only System Manager did, since that's always implicit. If
+nobody ever happened to add one from a System Manager login, the list is
+genuinely empty, not just filtered — both symptoms are the same root
+cause. Fixed by granting Inquiry Manager, Commercial Manager and
+Commercial Officer full `select+read+write+create` on both: every new
+Customer or Supplier needs a Contact/Address attached, so whoever can
+create those parties needs to be able to create one for them too.
 
 **Creating a new Employee who becomes a Marketer** still uses the exact same
 "+ Create a New Employee" quick-create every other Link field in this app

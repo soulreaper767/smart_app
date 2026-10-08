@@ -436,9 +436,15 @@ def grant_master_data_access():
 	  - Company / Currency / Country / User: select+read for everyone who
 	    can create an Inquiry — these are plain reference data, no
 	    create/write needed.
-	  - Contact / Address: select+read for Inquiry Manager only, matching
-	    the Permission Level 1 restriction that already hides those fields
-	    from Inquiry Officer/Marketer on the form itself.
+	  - Contact / Address: Inquiry Manager only, matching the Permission
+	    Level 1 restriction that already hides those fields from Inquiry
+	    Officer/Marketer on the form itself -- full select+read+write+
+	    create, not read-only, since Inquiry Manager also needs to actually
+	    manage the underlying Contact/Address records (from a Customer's
+	    own form, or their list views directly), not just see them on an
+	    Inquiry. Read-only here was a real bug, not a deliberate
+	    restriction: it meant nobody except System Manager could ever
+	    create an Address/Contact at all, site-wide.
 	"""
 	for role in ("Inquiry Officer", "Marketer", "Inquiry Manager"):
 		_grant_custom_docperm("Employee", role, select=1, read=1, create=1, write=1)
@@ -453,8 +459,16 @@ def grant_master_data_access():
 
 	_grant_custom_docperm("Customer", "Inquiry Manager", select=1, read=1, write=1, create=1)
 	_grant_custom_docperm("Item", "Inquiry Manager", select=1, read=1, create=1)
-	_grant_custom_docperm("Contact", "Inquiry Manager", select=1, read=1)
-	_grant_custom_docperm("Address", "Inquiry Manager", select=1, read=1)
+	# write+create, not just select+read -- Permission Level 1 on Inquiry
+	# only controls whether Inquiry Manager can see/edit contact_person/
+	# customer_address *on the Inquiry form itself*; it has nothing to do
+	# with managing the underlying Contact/Address doctypes directly (e.g.
+	# from a Customer's own form, or the Address/Contact list view), which
+	# was never granted at all -- a real "list is empty, New is blocked"
+	# bug, not a deliberate restriction like the Officer/Marketer one
+	# below.
+	_grant_custom_docperm("Contact", "Inquiry Manager", select=1, read=1, write=1, create=1)
+	_grant_custom_docperm("Address", "Inquiry Manager", select=1, read=1, write=1, create=1)
 
 
 # ---------------------------------------------------------------------------
@@ -476,12 +490,10 @@ def grant_commercial_access():
 		"Company",
 		"Currency",
 		"Customer",
-		"Contact",
 		"UOM",
 		"Sales Taxes and Charges Template",
 		"Purchase Taxes and Charges Template",
 		"Terms and Conditions",
-		"Address",
 		"User",  # Commercial Manager needs this to search for a Commercial Officer to assign
 		# Every one of these is read internally by BuyingController/
 		# SellingController's own set_missing_values/get_party_details
@@ -507,6 +519,16 @@ def grant_commercial_access():
 		# this (both were select+read only), a real bottleneck for a
 		# trading business whose whole buying pipeline runs on this list.
 		_grant_custom_docperm("Supplier", role, select=1, read=1, write=1, create=1, print=1, export=1, report=1)
+
+		# create+write, not just select+read -- every new Customer/Supplier
+		# needs a Contact/Address attached, and neither role could ever add
+		# one before this (both were select+read only, grouped in with
+		# genuinely static reference data like Currency/UOM above, which
+		# this isn't). This was the actual cause of "CRM > Address" looking
+		# empty with no way to add one: nobody except System Manager/
+		# Inquiry Manager had create rights on Address at all.
+		_grant_custom_docperm("Contact", role, select=1, read=1, write=1, create=1, print=1, export=1, report=1)
+		_grant_custom_docperm("Address", role, select=1, read=1, write=1, create=1, print=1, export=1, report=1)
 
 		# Multi-price management (see ensure_default_price_list /
 		# sync_item_prices_from_* in utils.py): the automatic sync itself
