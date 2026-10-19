@@ -1059,22 +1059,30 @@ own trade value or the direct-sale pipeline's Sales Invoice above.
   `outstanding_amount`, and status (Unpaid/Overdue/Paid) all come from it
   for free, fetched back onto Commission Invoice's own `outstanding_amount`
   for a quick glance.
-- **`Commission Income` item: seeded by `setup_commission_income_item`
-  (install.py), not created on the fly.** `ensure_commission_income_item`
-  (commission_invoice.py) still exists and still runs at submit time too,
-  but real live testing found that relying on it alone — creating the
-  Item inside the same transaction as the Sales Invoice that references
-  it — reliably failed with "Item Commission Income not found" and
-  aborted the whole submit (something in that same-transaction chain,
-  most likely ERPNext's own `set_missing_values` reading through
-  `frappe.get_cached_doc`/`get_cached_value` rather than a direct DB
-  read, couldn't see the Item that had just been inserted moments
-  earlier — and Frappe's own rollback-on-unhandled-exception then undid
-  that insert too, along with everything else in the request). Seeding it
-  once, well before anyone submits a Commission Invoice, in its own
-  unrelated transaction, is what actually works reliably — the same
-  pattern every other piece of this app's one-time master data already
-  follows.
+- **`Commission Income` item: two real bugs, found live, both fixed.**
+  `ensure_commission_income_item` (commission_invoice.py) looked the Item
+  up (and returned it) by `name` directly, assuming `name == item_code` —
+  only true when a site's Stock Settings "Item Naming By" is "Item Code".
+  On a site using "Naming Series" instead (common, often the default), no
+  Item is ever actually *named* `"Commission Income"`, so the existence
+  check never matched — the function kept silently creating a fresh
+  duplicate Item on every call (under an auto-generated name like
+  `STO-ITEM-2026-00704`) while still handing back the literal string
+  `"Commission Income"`, which was never a real Item name on that site
+  either, so every Sales Invoice line pointed at nothing — "Item
+  Commission Income not found," every single submit. Fixed to look up
+  and return by the `item_code` *field* instead, which works correctly
+  under either naming convention. Separately, it was also only ever
+  called lazily, at submit time, inside the very same transaction as the
+  Sales Invoice that immediately references it — risking the same
+  class of same-transaction visibility problem (a just-inserted row not
+  yet visible to a subsequent cached lookup) that bit other parts of this
+  app. Now also seeded once in `setup_commission_income_item`
+  (install.py), in its own unrelated transaction, well before anyone
+  submits a Commission Invoice — the same pattern every other piece of
+  this app's one-time master data already follows;
+  `ensure_commission_income_item` itself is untouched and still runs at
+  submit time too, now just a harmless no-op once already seeded.
 - **Payment, reversal, and write-off — all native ERPNext mechanics,
   reused rather than reinvented.** "Create > Payment" on Commission
   Invoice calls the same `erpnext.accounts.doctype.payment_entry.

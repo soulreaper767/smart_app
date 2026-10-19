@@ -115,12 +115,27 @@ class CommissionInvoice(Document):
 
 def ensure_commission_income_item():
 	"""The one Item every Commission Invoice's underlying Sales Invoice
-	bills against -- a non-stock service item, created once."""
-	if frappe.db.exists("Item", COMMISSION_INCOME_ITEM):
-		return COMMISSION_INCOME_ITEM
+	bills against -- a non-stock service item, created once.
+
+	Looked up (and returned) by its `item_code` field, never by `name`
+	directly -- a site with Stock Settings "Item Naming By" set to
+	"Naming Series" (a common, often default, ERPNext configuration) never
+	names an Item after its own item_code at all, so `frappe.db.exists
+	("Item", COMMISSION_INCOME_ITEM)` against `name` would never match on
+	such a site, and the hardcoded constant returned afterward wouldn't be
+	a real Item name either -- confirmed live: it silently created a
+	duplicate "Commission Income"-item_code Item under an auto-generated
+	name (e.g. "STO-ITEM-2026-00704") every single time this ran, while
+	every Sales Invoice line kept pointing at the literal string
+	"Commission Income", which was never an actual Item -- the real cause
+	behind "Item Commission Income not found" on every Commission Invoice
+	submit, on this exact kind of site."""
+	existing_name = frappe.db.get_value("Item", {"item_code": COMMISSION_INCOME_ITEM}, "name")
+	if existing_name:
+		return existing_name
 
 	item_group = frappe.db.get_value("Item Group", {"is_group": 0}, "name") or "All Item Groups"
-	frappe.get_doc(
+	item = frappe.get_doc(
 		{
 			"doctype": "Item",
 			"item_code": COMMISSION_INCOME_ITEM,
@@ -131,8 +146,9 @@ def ensure_commission_income_item():
 			"stock_uom": "Nos",
 			"description": "Commission income on indenting/brokering an Indent -- this app's actual revenue.",
 		}
-	).insert(ignore_permissions=True, ignore_mandatory=True)
-	return COMMISSION_INCOME_ITEM
+	)
+	item.insert(ignore_permissions=True, ignore_mandatory=True)
+	return item.name
 
 
 def _build_commission_invoice_from_indent(indent):
