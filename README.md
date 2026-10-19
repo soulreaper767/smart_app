@@ -1054,11 +1054,27 @@ own trade value or the direct-sale pipeline's Sales Invoice above.
   agreed term, not a generic default.
 - **On submit, a real Sales Invoice is created and submitted**
   (`create_and_submit_sales_invoice`) — one line, the `Commission Income`
-  service item (auto-created once, `ensure_commission_income_item`), rate
-  = `net_commission`, billed to the Supplier's stand-in Customer. This is
-  what actually hits the GL — native ageing, `outstanding_amount`, and
-  status (Unpaid/Overdue/Paid) all come from it for free, fetched back
-  onto Commission Invoice's own `outstanding_amount` for a quick glance.
+  service item, rate = `net_commission`, billed to the Supplier's stand-in
+  Customer. This is what actually hits the GL — native ageing,
+  `outstanding_amount`, and status (Unpaid/Overdue/Paid) all come from it
+  for free, fetched back onto Commission Invoice's own `outstanding_amount`
+  for a quick glance.
+- **`Commission Income` item: seeded by `setup_commission_income_item`
+  (install.py), not created on the fly.** `ensure_commission_income_item`
+  (commission_invoice.py) still exists and still runs at submit time too,
+  but real live testing found that relying on it alone — creating the
+  Item inside the same transaction as the Sales Invoice that references
+  it — reliably failed with "Item Commission Income not found" and
+  aborted the whole submit (something in that same-transaction chain,
+  most likely ERPNext's own `set_missing_values` reading through
+  `frappe.get_cached_doc`/`get_cached_value` rather than a direct DB
+  read, couldn't see the Item that had just been inserted moments
+  earlier — and Frappe's own rollback-on-unhandled-exception then undid
+  that insert too, along with everything else in the request). Seeding it
+  once, well before anyone submits a Commission Invoice, in its own
+  unrelated transaction, is what actually works reliably — the same
+  pattern every other piece of this app's one-time master data already
+  follows.
 - **Payment, reversal, and write-off — all native ERPNext mechanics,
   reused rather than reinvented.** "Create > Payment" on Commission
   Invoice calls the same `erpnext.accounts.doctype.payment_entry.

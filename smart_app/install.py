@@ -308,6 +308,7 @@ def setup():
 	run_step(setup_supplier_bank_fields, "supplier bank detail fields (for Indent)")
 	run_step(setup_customer_marketer_field, "customer marketer field")
 	run_step(setup_commission_billing_field, "commission billing field (customer represents supplier)")
+	run_step(setup_commission_income_item, "commission income item (for the auto-generated Sales Invoice)")
 	run_step(setup_workflow, "workflow")
 	run_step(setup_kanban_board, "kanban board")
 	run_step(setup_shipment_kanban, "shipment kanban board")
@@ -2192,6 +2193,36 @@ def setup_commission_billing_field():
 		insert_after="customer_name",
 	)
 	_set_property_setter("Customer", "represents_supplier", "hidden", "1", "Check")
+
+
+def setup_commission_income_item():
+	"""Real bug, found live: Commission Invoice.create_and_submit_sales_invoice
+	(commission_invoice.py) calls ensure_commission_income_item() to create
+	the "Commission Income" service Item on the fly, inside the same
+	transaction as the Sales Invoice it's about to insert -- but something
+	in that same-transaction chain (ERPNext's own set_missing_values, most
+	likely reading through frappe.get_cached_doc/get_cached_value rather
+	than a direct DB read) couldn't see the item that had just been
+	inserted moments earlier, throwing "Item Commission Income not found"
+	and aborting the whole submit. Confirmed live: the Item was gone
+	afterward too -- Frappe rolls back the entire request's transaction on
+	an unhandled exception, undoing the just-inserted Item along with
+	everything else.
+
+	Fixed the reliable way, matching every other piece of one-time master
+	data this app needs: seed it here, once, well before anyone ever
+	submits a Commission Invoice, so it's fully committed (and cached) on
+	its own, unrelated transaction. ensure_commission_income_item() itself
+	is untouched and still runs at submit time too, as a harmless no-op
+	once this has already created it -- kept as a defensive self-heal for
+	a site that somehow still doesn't have it."""
+	if not frappe.db.exists("DocType", "Commission Invoice"):
+		return
+	from smart_app.smart_app.doctype.commission_invoice.commission_invoice import (
+		ensure_commission_income_item,
+	)
+
+	ensure_commission_income_item()
 
 
 # ---------------------------------------------------------------------------
