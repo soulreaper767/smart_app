@@ -110,7 +110,15 @@ doc_events = {
 	},
 	"Sales Invoice": {
 		"validate": "smart_app.smart_app.utils.set_inquiry_from_sales_order",
-		"on_update": "smart_app.smart_app.utils.close_indents_on_full_payment",
+		# Defensive fallback only -- the one real path a Commission
+		# Invoice's Sales Invoice ever gets paid through (Payment Entry
+		# reconciliation) does NOT fire this; see close_indents_on_full_
+		# payment's own docstring (utils.py) and the Payment Entry hook
+		# below, which is what actually matters.
+		"on_update": "smart_app.smart_app.utils.close_indents_on_sales_invoice_update",
+	},
+	"Payment Entry": {
+		"on_submit": "smart_app.smart_app.utils.close_indents_on_full_payment",
 	},
 }
 

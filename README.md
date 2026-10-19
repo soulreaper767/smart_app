@@ -1561,6 +1561,43 @@ default changes, which is what every *future* transaction reads its
 default UOM from. Existing stock reports/balances are not retroactively
 reinterpreted.
 
+## Critical fix: Indent never actually closed on payment
+
+**Found live, in the same end-to-end walkthrough, immediately after the
+status-persistence fix above.** `close_indents_on_full_payment` was
+hooked on `Sales Invoice`'s own `on_update`, on the documented assumption
+that a Payment Entry reconciling against a Sales Invoice re-saves it,
+re-firing that hook. **Confirmed live that this assumption is wrong**:
+submitted a real Payment Entry fully settling a Commission Invoice's
+Sales Invoice — the Sales Invoice correctly showed `outstanding_amount =
+0` / `status = "Paid"` immediately afterward (confirmed against a raw DB
+read too, not just a cached/computed display value) — but the linked
+Commission Invoice stayed `"Submitted"` and its Indent stayed `"In
+Process"`. ERPNext's own payment reconciliation
+(`PaymentEntry.on_submit` → `update_outstanding_amounts`/
+`make_gl_entries`) updates a referenced Sales Invoice's own
+`outstanding_amount`/`status` via a direct, surgical database write —
+never a full `Document.save()` of the Sales Invoice — so a `doc_events`
+hook registered on Sales Invoice's own `on_update` never actually fires
+for the one real path a Commission Invoice ever gets paid through
+("Create > Payment" in `commission_invoice.js`, i.e. exactly this).
+
+**Fixed** by moving the real trigger to where the actual event happens:
+`Payment Entry.on_submit` (new `hooks.py` registration), checking each of
+*its own* `references` rows for a Sales Invoice that just became fully
+paid. The original `Sales Invoice.on_update` hook is kept too, renamed
+`close_indents_on_sales_invoice_update` — a harmless defensive fallback
+for any other path that might still fully settle a Sales Invoice via a
+genuine document save (a manual correction from Desk, say), but
+`Payment Entry.on_submit` is what actually matters for the normal flow.
+Both now share one helper, `_close_commission_invoices_for_sales_invoice`
+(`utils.py`), which re-reads `outstanding_amount` fresh from the database
+rather than trusting whichever document triggered it. The
+`backfill_commission_status`/`backfill_indent_status` steps above already
+catch up any Commission Invoice/Indent stuck by this specific bug too —
+no separate backfill needed, since they check the Sales Invoice's actual
+current state regardless of how it got there.
+
 ## Critical fix: status fields silently never persisted on submit/cancel
 
 **Found live, running a real end-to-end walkthrough** (`Indent`,

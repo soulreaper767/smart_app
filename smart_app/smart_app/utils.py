@@ -566,27 +566,22 @@ def set_inquiry_from_sales_order(doc, method=None):
 		doc.inquiry = frappe.db.get_value("Sales Order", sales_order, "inquiry")
 
 
-def close_indents_on_full_payment(doc, method=None):
-	"""Sales Invoice.on_update: an Indent's `indent_status` is entirely
-	automatic (see Indent.on_submit in indent.py) -- Submitted always means
-	"In Process", and the only thing that ever moves it on to "Closed" is
-	its own Commission Invoice's Sales Invoice (the commission amount --
-	this app's actual revenue, never the trade's own full value, see
-	Commission Invoice) being paid in full, checked here every time that
-	Sales Invoice is saved (a Payment Entry reconciling against it updates
-	and re-saves it, which is what actually re-fires this). No manual
-	"mark as" button for this path -- keeps the lifecycle tied to real
-	payment status; a Commission Officer can still write off a stalled
-	balance and close both manually (Commission Invoice.write_off_and_close)
-	for the "unlikely to ever be received" case."""
-	if not frappe.db.exists("DocType", "Commission Invoice"):
-		return
-	if doc.docstatus != 1 or flt(doc.outstanding_amount) != 0:
+def _close_commission_invoices_for_sales_invoice(sales_invoice_name):
+	"""Shared by both close_indents_on_full_payment (Payment Entry.on_submit
+	-- see its own docstring for why that's the trigger that actually
+	fires) and close_indents_on_sales_invoice_update (Sales Invoice.
+	on_update -- kept as a defensive fallback for any other path that
+	might fully settle a Sales Invoice via a genuine document save, e.g. a
+	manual outstanding_amount correction). Re-reads outstanding_amount
+	fresh from the database rather than trusting a passed-in doc, since
+	the two callers hand this two different kinds of document."""
+	outstanding = frappe.db.get_value("Sales Invoice", sales_invoice_name, "outstanding_amount")
+	if outstanding is None or flt(outstanding) != 0:
 		return
 
 	for ci in frappe.get_all(
 		"Commission Invoice",
-		filters={"sales_invoice": doc.name, "docstatus": 1, "commission_status": ["!=", "Received"]},
+		filters={"sales_invoice": sales_invoice_name, "docstatus": 1, "commission_status": ["!=", "Received"]},
 		fields=["name", "indent"],
 	):
 		frappe.db.set_value("Commission Invoice", ci.name, "commission_status", "Received")
@@ -598,6 +593,58 @@ def close_indents_on_full_payment(doc, method=None):
 				"Closed",
 				update_modified=False,
 			)
+
+
+def close_indents_on_full_payment(doc, method=None):
+	"""Payment Entry.on_submit -- the one place this actually needs to be
+	hooked, confirmed live. An Indent's `indent_status` is entirely
+	automatic (see Indent.on_submit in indent.py) -- the only thing that
+	ever moves it on to "Closed" is its own Commission Invoice's Sales
+	Invoice (the commission amount -- this app's actual revenue, never
+	the trade's own full value, see Commission Invoice) being paid in
+	full.
+
+	This was originally hooked on Sales Invoice's own `on_update`, on the
+	assumption that a Payment Entry reconciling against a Sales Invoice
+	re-saves it, re-firing that hook. Confirmed live that this is wrong:
+	ERPNext's own payment reconciliation
+	(PaymentEntry.on_submit -> update_outstanding_amounts/make_gl_entries)
+	updates a referenced Sales Invoice's `outstanding_amount`/`status`
+	via a direct, surgical database write, not a full `Document.save()`
+	of the Sales Invoice -- so a doc_events hook registered on Sales
+	Invoice's own `on_update` never actually fires for the one real path
+	a Commission Invoice ever gets paid through ("Create > Payment" in
+	commission_invoice.js, i.e. exactly this). No manual "mark as" button
+	for this path -- keeps the lifecycle tied to real payment status; a
+	Commercial Officer/Manager can still write off a stalled balance and
+	close both manually (Commission Invoice.write_off_and_close) for the
+	"unlikely to ever be received" case."""
+	if not frappe.db.exists("DocType", "Commission Invoice"):
+		return
+	if doc.docstatus != 1:
+		return
+
+	sales_invoice_names = {
+		ref.reference_name
+		for ref in doc.get("references") or []
+		if ref.reference_doctype == "Sales Invoice"
+	}
+	for si_name in sales_invoice_names:
+		_close_commission_invoices_for_sales_invoice(si_name)
+
+
+def close_indents_on_sales_invoice_update(doc, method=None):
+	"""Sales Invoice.on_update -- defensive fallback for any path other
+	than a Payment Entry (see close_indents_on_full_payment, the trigger
+	that actually matters for the normal "Create > Payment" flow) that
+	might still fully settle a Sales Invoice via a genuine document save
+	-- e.g. a manual correction from Desk. Harmless no-op the rest of the
+	time."""
+	if not frappe.db.exists("DocType", "Commission Invoice"):
+		return
+	if doc.docstatus != 1:
+		return
+	_close_commission_invoices_for_sales_invoice(doc.name)
 
 
 def send_commission_reminder_email(commission_invoice):
