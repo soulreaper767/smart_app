@@ -29,11 +29,21 @@ class Indent(Document):
 		button (see close_indents_on_full_payment in utils.py for the other
 		end of it): Submitted always means "In Process", and the only thing
 		that ever moves it to "Closed" is the linked Sales Invoice actually
-		being paid in full."""
-		self.indent_status = "In Process"
+		being paid in full.
+
+		db_set, not a plain assignment -- confirmed live (and in Frappe's
+		own document.py: db_update() in _save() runs before
+		run_post_save_methods(), which is what dispatches on_submit/
+		on_cancel) that a plain `self.field = value` here is silently lost:
+		the row is already written to the database by the time this hook
+		runs, so only an explicit write from here actually persists. Every
+		existing Indent submitted before this fix has a blank
+		indent_status despite being docstatus=1 -- see
+		backfill_indent_status (install.py) for the one-time correction."""
+		self.db_set("indent_status", "In Process")
 
 	def on_cancel(self):
-		self.indent_status = ""
+		self.db_set("indent_status", "")
 
 
 # Item master fieldnames that might hold an HS/customs tariff code, tried in

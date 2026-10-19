@@ -66,9 +66,20 @@ class CommissionInvoice(Document):
 		Net Commission amount -- this, not the Indent's own trade value, is
 		this app's actual revenue (see the module docstring context in
 		indent.py: Indent moved to sourcing from Quotation specifically so
-		it never depends on a Sales Invoice for the trade's full value)."""
+		it never depends on a Sales Invoice for the trade's full value).
+
+		db_set, not a plain assignment -- confirmed live that a plain
+		`self.field = value` inside on_submit/on_cancel is silently lost
+		(Frappe's own _save() runs db_update() before dispatching
+		on_submit/on_cancel, so the row is already written to the database
+		by the time this hook runs; `sales_invoice` right above already
+		used db_set for the same reason, commission_status just hadn't
+		been caught yet). Every Commission Invoice submitted before this
+		fix has a blank commission_status despite being docstatus=1 -- see
+		backfill_commission_status (install.py) for the one-time
+		correction."""
 		self.create_and_submit_sales_invoice()
-		self.commission_status = "Submitted"
+		self.db_set("commission_status", "Submitted")
 
 	def create_and_submit_sales_invoice(self):
 		if self.sales_invoice:
@@ -110,7 +121,7 @@ class CommissionInvoice(Document):
 			si = frappe.get_doc("Sales Invoice", self.sales_invoice)
 			if si.docstatus == 1:
 				si.cancel()
-		self.commission_status = ""
+		self.db_set("commission_status", "")
 
 
 def ensure_commission_income_item():

@@ -47,10 +47,15 @@ class SupplierComparativeStatement(Document):
 			)
 
 	def on_submit(self):
-		self.comparative_status = "Completed"
+		# db_set, not a plain assignment -- confirmed live that a plain
+		# `self.field = value` inside on_submit/on_cancel is silently lost
+		# (Frappe's own _save() runs db_update() before dispatching
+		# on_submit/on_cancel, so the row is already written by the time
+		# this hook runs). See the identical note on Indent.on_submit.
+		self.db_set("comparative_status", "Completed")
 
 	def on_cancel(self):
-		self.comparative_status = ""
+		self.db_set("comparative_status", "")
 
 
 def _get_rfq_quotation_rates(rfq_name):

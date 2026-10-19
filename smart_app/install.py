@@ -338,6 +338,9 @@ def setup():
 	run_step(backfill_test_user_roles, "backfill test user roles")
 	run_step(backfill_commercial_manager_inquiry_user_role, "backfill Inquiry User role for Commercial Manager")
 	run_step(backfill_commercial_status, "backfill blank/stuck commercial_status on existing Inquiries")
+	run_step(backfill_comparative_status, "backfill blank comparative_status on existing Comparative Statements")
+	run_step(backfill_commission_status, "backfill blank commission_status on existing Commission Invoices")
+	run_step(backfill_indent_status, "backfill blank/stuck indent_status on existing Indents")
 	run_step(backfill_party_price_lists, "backfill default Price Lists for existing Customers/Suppliers")
 	run_step(backfill_item_default_warehouse, "backfill default warehouse on existing stock Items")
 	run_step(backfill_supplier_bank_details, "backfill supplier bank details (for Indent)")
@@ -3436,6 +3439,102 @@ def backfill_commercial_status():
 		where commercial_officer is not null
 			and commercial_officer != ''
 			and commercial_status = 'Unassigned'
+		"""
+	)
+
+
+def backfill_comparative_status():
+	"""Supplier Comparative Statement.on_submit set `comparative_status`
+	via a plain `self.comparative_status = "Completed"` assignment, which
+	-- confirmed live -- Frappe silently discards: _save()'s own
+	db_update() runs before run_post_save_methods() dispatches on_submit,
+	so the row is already written to the database by the time that
+	assignment happens. Fixed in supplier_comparative_statement.py
+	(now db_set); this corrects every statement already submitted before
+	that fix, which is stuck blank despite being docstatus=1."""
+	frappe.db.sql(
+		"""
+		update `tabSupplier Comparative Statement`
+		set comparative_status = 'Completed'
+		where docstatus = 1 and (comparative_status is null or comparative_status = '')
+		"""
+	)
+
+
+def backfill_commission_status():
+	"""Commission Invoice.on_submit had the exact same plain-assignment
+	bug as Supplier Comparative Statement above (see
+	backfill_comparative_status) -- this corrects every Commission
+	Invoice already submitted before the db_set fix, which is stuck
+	blank despite being docstatus=1. Run before backfill_indent_status,
+	which depends on commission_status already being correct here."""
+	# Its own Sales Invoice is already fully paid -- Received.
+	frappe.db.sql(
+		"""
+		update `tabCommission Invoice` ci
+		inner join `tabSales Invoice` si on si.name = ci.sales_invoice
+		set ci.commission_status = 'Received'
+		where ci.docstatus = 1
+			and (ci.commission_status is null or ci.commission_status = '')
+			and si.outstanding_amount = 0
+		"""
+	)
+	# write_off_and_close already ran (it correctly used db_set itself,
+	# so write_off_reason is reliable) but commission_status wasn't set
+	# yet when that happened, because on_submit never got it there first.
+	frappe.db.sql(
+		"""
+		update `tabCommission Invoice`
+		set commission_status = 'Written Off'
+		where docstatus = 1
+			and (commission_status is null or commission_status = '')
+			and write_off_reason is not null and write_off_reason != ''
+		"""
+	)
+	# Everything else submitted and still blank -- just Submitted, same
+	# as a freshly-submitted one with nothing received yet.
+	frappe.db.sql(
+		"""
+		update `tabCommission Invoice`
+		set commission_status = 'Submitted'
+		where docstatus = 1 and (commission_status is null or commission_status = '')
+		"""
+	)
+
+
+def backfill_indent_status():
+	"""Indent.on_submit had the exact same plain-assignment bug as
+	Supplier Comparative Statement/Commission Invoice above (see
+	backfill_comparative_status) -- this corrects every Indent already
+	submitted before the db_set fix, which is stuck blank (or, on one
+	site, the literal string "Draft" -- not even a valid `indent_status`
+	Select option, left over from an earlier version of this doctype)
+	despite being docstatus=1. Must run after backfill_commission_status,
+	since the "already Closed" branch here depends on commission_status
+	already being correct."""
+	# Its Commission Invoice already reached Received/Written Off --
+	# should already be Closed. `indent_status is null or ... not in (...)`
+	# deliberately, not just `not in` -- SQL's NOT IN never matches a NULL
+	# column against anything, so a blank indent_status would otherwise
+	# silently fail to match here at all.
+	frappe.db.sql(
+		"""
+		update `tabIndent` i
+		inner join `tabCommission Invoice` ci on ci.indent = i.name and ci.docstatus = 1
+		set i.indent_status = 'Closed'
+		where i.docstatus = 1
+			and (i.indent_status is null or i.indent_status not in ('In Process', 'Closed'))
+			and ci.commission_status in ('Received', 'Written Off')
+		"""
+	)
+	# Everything else submitted and not already a valid status -- just
+	# In Process, same as a freshly-submitted Indent.
+	frappe.db.sql(
+		"""
+		update `tabIndent`
+		set indent_status = 'In Process'
+		where docstatus = 1
+			and (indent_status is null or indent_status not in ('In Process', 'Closed'))
 		"""
 	)
 

@@ -1561,6 +1561,56 @@ default changes, which is what every *future* transaction reads its
 default UOM from. Existing stock reports/balances are not retroactively
 reinterpreted.
 
+## Critical fix: status fields silently never persisted on submit/cancel
+
+**Found live, running a real end-to-end walkthrough** (`Indent`,
+`Supplier Comparative Statement`, `Commission Invoice`). All three had the
+exact same bug: their `on_submit`/`on_cancel` set their own status field
+with a plain `self.field = value` assignment —
+
+```python
+def on_submit(self):
+    self.indent_status = "In Process"   # looks right, never persists
+```
+
+— which Frappe silently discards. Confirmed directly against Frappe's own
+`document.py`: `_save()` calls `db_update()` (the actual database write)
+*before* `run_post_save_methods()`, which is what dispatches `on_submit`/
+`on_cancel`. By the time either hook runs, the row has already been
+written — a plain attribute assignment inside them only changes the
+in-memory Python object for the rest of that one request, and is gone the
+moment it ends. The *only* thing that actually persists a value written
+inside `on_submit`/`on_cancel` is `self.db_set(...)`. Every one of these
+three doctypes had at least one other place (`Commission Invoice.
+create_and_submit_sales_invoice`'s `self.db_set("sales_invoice", ...)`,
+`utils.close_indents_on_full_payment`, `write_off_and_close`) that
+already used `db_set`/`frappe.db.set_value` correctly — the bug was
+specifically the plain-assignment status lines, easy to miss because the
+code *reads* as correct and the in-memory object *looks* right for the
+remainder of that same request (e.g. the immediate API response after
+submitting showed the right status — only a fresh read afterward revealed
+it was never actually saved).
+
+**Practical impact**: every `Indent`/`Supplier Comparative Statement`/
+`Commission Invoice` ever submitted on any site running the old code has
+a **blank status field despite being `docstatus = 1`** — confirmed live,
+including Indents going back to this app's early testing (one even shows
+the literal string `"Draft"`, left over from an earlier version of the
+doctype, not even a valid `indent_status` Select option). This is why
+Indents never visibly reached "In Process", Comparative Statements never
+showed "Completed", and Commission Invoices never showed "Submitted" —
+none of it was actually broken business logic, just this one persistence
+gotcha repeated three times.
+
+**Fixed**: all three now use `self.db_set(...)`. **Also added three new
+backfill steps** to `install.py`'s `setup()` — `backfill_comparative_status`,
+`backfill_commission_status`, `backfill_indent_status` (run in that order;
+Commission depends on nothing else, Indent depends on Commission already
+being correct) — so every existing blank/stuck record self-heals on the
+next migrate, the same self-healing convention every other backfill in
+this app already follows. No manual data fix needed beyond pulling and
+migrating.
+
 ## Critical fix: `_grant_custom_docperm` was silently revoking native access
 
 **Found on a live site, run immediately if you migrated before this was
