@@ -3149,11 +3149,67 @@ def grant_inquiry_manager_workflow_access():
 		_grant_custom_docperm(doctype, "Inquiry Manager", read=1, write=1, select=1)
 
 
+# Every actual permission column a DocPerm/Custom DocPerm row can carry --
+# see _seed_custom_docperm_from_native below for why this exact list matters.
+DOCPERM_COLUMNS = (
+	"role", "permlevel", "if_owner", "read", "write", "create", "delete",
+	"submit", "cancel", "amend", "report", "export", "import", "share",
+	"print", "email", "select",
+)
+
+
+def _seed_custom_docperm_from_native(doctype):
+	"""Frappe's own Meta.set_custom_permissions() (frappe/model/meta.py) --
+	docstring literally "Reset `permissions` with Custom DocPerm if exists"
+	-- means the moment ANY Custom DocPerm row exists for a doctype, every
+	role's effective permissions on it come *only* from Custom DocPerm,
+	completely replacing (not merging with) that doctype's own native
+	`permissions` from its DocType JSON. So the very first
+	_grant_custom_docperm call for a given core doctype -- adding, say,
+	Commercial Officer's own row -- silently revoked every *other* role's
+	native access to it too (System Manager included), unless that
+	doctype already happened to have Custom DocPerm rows from something
+	else. This is exactly what caused a System Manager login to get
+	"does not have doctype access via role permission for document
+	Address" after this app's own grant ran on a live site -- a real,
+	serious regression, not a one-off edge case, since every core
+	doctype grant_master_data_access/grant_commercial_access/
+	grant_logistics_access ever touches (Address, Contact, Supplier,
+	Quotation, Purchase Order, ...) hits this exact same first-grant
+	moment.
+
+	Fixed by seeding Custom DocPerm with a verbatim copy of the doctype's
+	own native permissions the first time this app ever grants anything
+	on it -- the same thing Frappe's own Role Permissions Manager UI does
+	before letting a user edit permissions through the Desk, so every
+	role that already had default access keeps it. Only runs once per
+	doctype (skips immediately if Custom DocPerm rows already exist, from
+	this app or from anything else -- never overwrites an existing
+	override of unknown origin)."""
+	if frappe.db.exists("Custom DocPerm", {"parent": doctype}):
+		return
+
+	doctype_doc = frappe.get_cached_doc("DocType", doctype)
+	for perm in doctype_doc.get("permissions") or []:
+		row = {col: perm.get(col) for col in DOCPERM_COLUMNS}
+		frappe.get_doc(
+			{
+				"doctype": "Custom DocPerm",
+				"parent": doctype,
+				"parenttype": "DocType",
+				"parentfield": "permissions",
+				**row,
+			}
+		).insert(ignore_permissions=True)
+
+
 def _grant_custom_docperm(doctype, role, **perms):
 	"""Reconciles the grant on every run (not just create-once), so widening
 	or narrowing a permission set in this file self-heals on the next
 	migrate instead of being stuck with whatever was granted the first time
 	a given (doctype, role) pair was seen."""
+	_seed_custom_docperm_from_native(doctype)
+
 	existing_name = frappe.db.get_value(
 		"Custom DocPerm", {"parent": doctype, "role": role, "permlevel": 0}, "name"
 	)

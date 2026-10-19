@@ -1537,6 +1537,53 @@ default changes, which is what every *future* transaction reads its
 default UOM from. Existing stock reports/balances are not retroactively
 reinterpreted.
 
+## Critical fix: `_grant_custom_docperm` was silently revoking native access
+
+**Found on a live site, run immediately if you migrated before this was
+fixed.** Frappe's own `Meta.set_custom_permissions()` (`frappe/model/
+meta.py`) — docstring literally *"Reset `permissions` with Custom DocPerm
+if exists"* — means the moment **any** Custom DocPerm row exists for a
+doctype, every role's effective permission on it comes **only** from
+Custom DocPerm, completely replacing (not merging with) that doctype's
+own native permissions from its DocType JSON. `_grant_custom_docperm`
+(used throughout `grant_master_data_access`/`grant_commercial_access`/
+`grant_logistics_access`/`grant_inquiry_manager_workflow_access`) never
+accounted for this: the very first grant this app ever made on a given
+core doctype — e.g. Commercial Officer's own row on Address — silently
+revoked every *other* role's native access to it too, **System Manager
+included**. Confirmed live: on one deployed site, Address, Quotation,
+Sales Order, Purchase Order, Price List, Payment Entry and 11 other core
+doctypes had all lost access for Sales User/Manager, Purchase User/
+Manager, Accounts User/Manager, Stock User, Manufacturing Manager, and
+System Manager itself — not a smart_app-specific problem, a
+site-wide one affecting core ERPNext Sales/Buying/Accounts/Stock users.
+
+**Fixed going forward**: `_grant_custom_docperm` now calls
+`_seed_custom_docperm_from_native(doctype)` first — the moment this app
+is about to make the *first* Custom DocPerm row for a doctype, it copies
+that doctype's entire native permission set into Custom DocPerm verbatim
+first, so nothing is lost. This only protects a doctype this app hasn't
+granted anything on yet, though — anything already poisoned by the old
+code on a site that already migrated needs the one-time repair below.
+
+```bash
+# preview only, writes nothing:
+bench --site <your-site> execute smart_app.repair_custom_docperm.repair_custom_docperm --kwargs "{'dry_run': True}"
+bench --site <your-site> execute smart_app.repair_custom_docperm.repair_custom_docperm
+```
+
+`smart_app/repair_custom_docperm.py` diffs each affected doctype's
+*native* DocType.json permissions (untouched the whole time — nothing was
+ever destroyed, only shadowed) against its current Custom DocPerm rows,
+and inserts a verbatim copy of any native `(role, permlevel, if_owner)`
+combination with zero Custom DocPerm presence. **Purely additive** — never
+touches a role/permlevel that already has a Custom DocPerm row, even a
+restrictive one, so it can't undo a legitimate prior customisation.
+Deliberately scoped to only the exact doctypes this app's own code has
+ever called `_grant_custom_docperm` on (`AFFECTED_DOCTYPES` in the
+script) — never a site-wide sweep, so a site's own unrelated Custom
+DocPerm customisation elsewhere (HR/Accounts doctypes, say) is untouched.
+
 ## Full-access grant script (demo/admin accounts)
 
 `smart_app/grant_full_access.py` gives one named, already-existing User
