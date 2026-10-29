@@ -368,7 +368,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Commercial Status",
-   "options": "Unassigned\nAssigned\nQuotation Created\nRFQ Created\nRFQ Sent",
+   "options": "Unassigned\nAssigned\nRFQ Created\nRFQ Sent\nComparative Statement Completed\nQuotation Created\nQuotation Approved\nShared to Marketer",
    "read_only": 1
   },
   {

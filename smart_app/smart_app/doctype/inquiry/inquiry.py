@@ -4,11 +4,10 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.model.mapper import get_mapped_doc
 from frappe.contacts.doctype.contact.contact import get_default_contact
 from frappe.contacts.doctype.address.address import get_default_address
 
-from smart_app.smart_app.utils import get_default_warehouse_for_company
+from smart_app.smart_app.utils import advance_inquiry_commercial_status, get_default_warehouse_for_company
 
 INQUIRY_EDIT_ROLES = {"Inquiry Officer", "Marketer", "Inquiry Manager"}
 
@@ -147,9 +146,12 @@ class Inquiry(Document):
 	def sync_commercial_status(self):
 		"""Once a Commercial Manager assigns commercial_officer on a submitted
 		Inquiry, flip commercial_status from Unassigned to Assigned. Later
-		stages (Quotation Created / RFQ Created / RFQ Sent) are advanced
-		elsewhere, from Quotation/Request for Quotation doc events (see
-		smart_app.smart_app.utils), never walked backwards here.
+		stages (RFQ Created / RFQ Sent / Comparative Statement Completed /
+		Quotation Created / Quotation Approved / Shared to Marketer) are
+		advanced elsewhere, from Request for Quotation/Supplier Comparative
+		Statement doc events and the Quotation approve/share actions (see
+		smart_app.smart_app.utils and inquiry.py's own approve_quotation/
+		share_quotation_with_marketer), never walked backwards here.
 
 		Treats a blank/null commercial_status the same as "Unassigned" --
 		any Inquiry that existed before this field was added to the doctype
@@ -397,55 +399,10 @@ def assign_commercial_officer(inquiry_name, commercial_officer=None):
 	return doc.commercial_officer
 
 
-@frappe.whitelist()
-def make_quotation(source_name, target_doc=None):
-	"""Mirrors erpnext.crm.doctype.opportunity.opportunity.make_quotation --
-	called from the "Get Items From" > "Inquiry" button added to the core
-	Quotation form via a Client Script (see setup_quotation_integration in
-	install.py). Only Inquiries assigned to the current Commercial Officer
-	(and submitted) are offered as a source, via that button's
-	get_query_filters."""
-
-	def set_missing_values(source, target):
-		quotation = frappe.get_doc(target)
-		quotation.quotation_to = "Customer"
-		quotation.party_name = source.inquiry_source
-		quotation.run_method("set_missing_values")
-		quotation.run_method("calculate_taxes_and_totals")
-
-	def update_item(source_row, target_row, source_parent):
-		target_row.item_code = source_row.item
-		target_row.qty = source_row.qty
-
-	doclist = get_mapped_doc(
-		"Inquiry",
-		source_name,
-		{
-			"Inquiry": {
-				"doctype": "Quotation",
-				"field_map": {
-					"company": "company",
-					"name": "inquiry",
-				},
-			},
-			"Inquiry Item": {
-				"doctype": "Quotation Item",
-				"field_map": {"item": "item_code", "qty": "qty"},
-				"postprocess": update_item,
-				"add_if_empty": True,
-			},
-		},
-		target_doc,
-		set_missing_values,
-	)
-
-	return doclist
-
-
-def _append_rfq_item(rfq, source_row):
+def _append_rfq_item(rfq, item_code, qty):
 	"""Shared by both create_request_for_quotation and
-	get_request_for_quotation_data below: append one Quotation Item's data
-	as a Request for Quotation Item row.
+	get_request_for_quotation_data below: append one (item_code, qty) pair
+	-- an Inquiry Item's own fields -- as a Request for Quotation Item row.
 
 	Sets `warehouse` deliberately -- ERPNext's own
 	erpnext.buying.utils.validate_stock_item_warehouse throws "Row #{n}:
@@ -456,23 +413,21 @@ def _append_rfq_item(rfq, source_row):
 	app's own Item Link fields defaults "Maintain Stock" on (see
 	ensure_item_default_warehouse in utils.py), so a row built without a
 	warehouse here would fail that check immediately on insert."""
-	item = frappe.db.get_value(
-		"Item", source_row.item_code, ["stock_uom", "is_stock_item"], as_dict=True
-	)
+	item = frappe.db.get_value("Item", item_code, ["stock_uom", "is_stock_item"], as_dict=True)
 	if not item:
 		return
 
 	warehouse = None
 	if item.is_stock_item:
 		warehouse = frappe.db.get_value(
-			"Item Default", {"parent": source_row.item_code, "company": rfq.company}, "default_warehouse"
+			"Item Default", {"parent": item_code, "company": rfq.company}, "default_warehouse"
 		) or get_default_warehouse_for_company(rfq.company)
 
 	rfq.append(
 		"items",
 		{
-			"item_code": source_row.item_code,
-			"qty": source_row.qty,
+			"item_code": item_code,
+			"qty": qty,
 			"schedule_date": frappe.utils.add_days(frappe.utils.today(), 7),
 			"uom": item.stock_uom,
 			"stock_uom": item.stock_uom,
@@ -533,13 +488,51 @@ def _populate_rfq_suppliers_and_template(rfq):
 			rfq.set_data_for_supplier()
 
 
+def _require_inquiry_for_rfq(inquiry_name):
+	"""Shared precondition for both create_request_for_quotation and
+	get_request_for_quotation_data below: Stage B of the corrected pipeline
+	(Inquiry Manager correction, 2026-10-30) -- "Inquiry will be assigned
+	1st and then commercial officer will send the RFQ to the suppliers."
+	The RFQ is built straight from the Inquiry now, never from a
+	Quotation -- there isn't one yet at this point; the Quotation itself
+	only gets prepared later, from the Comparative Statement, once supplier
+	prices have been compared (see create_quotation_from_comparative_
+	statement, supplier_comparative_statement.py)."""
+	inquiry = frappe.get_doc("Inquiry", inquiry_name)
+	inquiry.check_permission("read")
+
+	if inquiry.docstatus != 1:
+		frappe.throw(_("Only a submitted Inquiry can have a Request for Quotation raised against it."))
+	if not inquiry.commercial_officer:
+		frappe.throw(_("This Inquiry has not been assigned to a Commercial Officer yet."))
+	if not inquiry.items:
+		frappe.throw(_("This Inquiry has no items to request a quotation for."))
+
+	return inquiry
+
+
+def _build_rfq_from_inquiry(inquiry):
+	rfq = frappe.new_doc("Request for Quotation")
+	rfq.company = inquiry.company
+	rfq.transaction_date = frappe.utils.today()
+	rfq.inquiry = inquiry.name
+
+	for row in inquiry.items:
+		if not row.item:
+			continue
+		_append_rfq_item(rfq, row.item, row.qty)
+
+	_populate_rfq_suppliers_and_template(rfq)
+	return rfq
+
+
 @frappe.whitelist()
-def create_request_for_quotation(quotation_name):
-	"""Builds a brand new, separate draft Request for Quotation from a
-	Quotation's items -- the "create a new document" direction, used by the
-	"Create > Request for Quotation" button on an already-open Quotation.
-	See make_request_for_quotation below for the reverse "Get Items From"
-	direction, used from a blank Request for Quotation instead.
+def create_request_for_quotation(inquiry_name):
+	"""Builds a brand new, separate draft Request for Quotation from an
+	Inquiry's items directly -- the "create a new document" direction, used
+	by the "Create > Request for Quotation" button on a submitted, assigned
+	Inquiry. See get_request_for_quotation_data below for the reverse "Get
+	Items From" direction, used from a blank Request for Quotation instead.
 
 	Left as a draft for deliberate human review: this only prepares the RFQ
 	(items + supplier/contact/email rows) -- submitting it (which also
@@ -554,46 +547,31 @@ def create_request_for_quotation(quotation_name):
 			_("You do not have permission to create a Request for Quotation."), frappe.PermissionError
 		)
 
-	quotation = frappe.get_doc("Quotation", quotation_name)
-	quotation.check_permission("read")
-
-	if not quotation.items:
-		frappe.throw(_("This Quotation has no items to request a quotation for."))
-
-	rfq = frappe.new_doc("Request for Quotation")
-	rfq.company = quotation.company
-	rfq.transaction_date = frappe.utils.today()
-	if frappe.get_meta("Request for Quotation").has_field("quotation"):
-		rfq.quotation = quotation.name
-	if frappe.get_meta("Request for Quotation").has_field("inquiry"):
-		rfq.inquiry = quotation.get("inquiry")
-
-	for row in quotation.items:
-		if not row.item_code:
-			continue
-		_append_rfq_item(rfq, row)
-
-	_populate_rfq_suppliers_and_template(rfq)
-
+	inquiry = _require_inquiry_for_rfq(inquiry_name)
+	rfq = _build_rfq_from_inquiry(inquiry)
 	rfq.insert(ignore_permissions=True, ignore_mandatory=True)
 
-	if quotation.get("inquiry"):
-		frappe.db.set_value("Inquiry", quotation.inquiry, "commercial_status", "RFQ Created")
+	frappe.db.set_value("Inquiry", inquiry.name, "commercial_status", "RFQ Created")
 
 	return rfq.name
 
 
 @frappe.whitelist()
 def get_quotations_for_rfq(doctype, txt, searchfield, start, page_len, filters):
-	"""Link-field query for the "Get Items From > Quotation" button on a
-	blank Request for Quotation (RFQ_CLIENT_SCRIPT_JS). A Commercial
-	Officer should only ever be offered their OWN submitted Quotations to
-	build an RFQ from, never anyone else's -- Quotation has no
-	commercial_officer field of its own (only Inquiry does), so `owner` is
-	the accurate proxy: a Commercial Officer only ever creates a Quotation
-	for an Inquiry already scoped to themselves in the first place.
-	Commercial Manager/System Manager (oversight roles) see every
-	submitted Quotation."""
+	"""Link-field query for Indent's own "Get Items From > Quotation"
+	button (indent.js) -- a Commercial Officer should only ever be offered
+	their OWN submitted Quotations to build an Indent from, never anyone
+	else's -- Quotation has no commercial_officer field of its own (only
+	Inquiry does), so `owner` is the accurate proxy: a Commercial Officer
+	only ever creates a Quotation for an Inquiry already scoped to
+	themselves in the first place. Commercial Manager/System Manager
+	(oversight roles) see every submitted Quotation.
+
+	No longer used to scope Request for Quotation's own "Get Items From"
+	(Request for Quotation is built from Inquiry directly now, see
+	create_request_for_quotation above) -- kept under this name since
+	Indent's own picker (the one real remaining caller) already points at
+	it."""
 	conditions = ["docstatus = 1", "(name like %(txt)s or party_name like %(txt)s)"]
 	values = {"txt": f"%{txt}%", "start": start, "page_len": page_len}
 
@@ -615,42 +593,19 @@ def get_quotations_for_rfq(doctype, txt, searchfield, start, page_len, filters):
 
 
 @frappe.whitelist()
-def get_request_for_quotation_data(quotation_name):
-	"""Used by the "Get Items From > Quotation" button on a blank Request
-	for Quotation (RFQ_CLIENT_SCRIPT_JS in install.py). Builds the exact
-	same items/suppliers/email_template as create_request_for_quotation,
-	but returns them as plain data for the client to merge into the form
+def get_request_for_quotation_data(inquiry_name):
+	"""Used by the "Get Items From > Inquiry" button on a blank Request for
+	Quotation (RFQ_CLIENT_SCRIPT_JS in install.py). Builds the exact same
+	items/suppliers/email_template as create_request_for_quotation, but
+	returns them as plain data for the client to merge into the form
 	that's already open (frm.set_value / clear_table / add_child), rather
-	than inserting a separate document -- erpnext.utils.map_current_doc's
-	generic MultiSelectDialog + frappe.model.mapper.map_docs pipeline
-	(the mechanism make_quotation's own Inquiry-mapping button uses) is
-	built around picking one-or-more *source rows*, not a single parent
-	document to clone data from, and didn't suit this direction well."""
-	quotation = frappe.get_doc("Quotation", quotation_name)
-	quotation.check_permission("read")
-
-	if not quotation.items:
-		frappe.throw(_("This Quotation has no items to request a quotation for."))
-
-	rfq = frappe.new_doc("Request for Quotation")
-	rfq.company = quotation.company
-	rfq.transaction_date = frappe.utils.today()
-	if frappe.get_meta("Request for Quotation").has_field("quotation"):
-		rfq.quotation = quotation.name
-	if frappe.get_meta("Request for Quotation").has_field("inquiry"):
-		rfq.inquiry = quotation.get("inquiry")
-
-	for row in quotation.items:
-		if not row.item_code:
-			continue
-		_append_rfq_item(rfq, row)
-
-	_populate_rfq_suppliers_and_template(rfq)
+	than inserting a separate document."""
+	inquiry = _require_inquiry_for_rfq(inquiry_name)
+	rfq = _build_rfq_from_inquiry(inquiry)
 
 	return {
 		"company": rfq.company,
 		"transaction_date": rfq.transaction_date,
-		"quotation": rfq.get("quotation"),
 		"inquiry": rfq.get("inquiry"),
 		"email_template": rfq.get("email_template"),
 		"message_for_supplier": rfq.get("message_for_supplier"),
@@ -679,3 +634,81 @@ def get_request_for_quotation_data(quotation_name):
 			for d in rfq.suppliers
 		],
 	}
+
+
+# ---------------------------------------------------------------------------
+# Quotation approval + marketer sharing -- the last two steps of the
+# corrected pipeline (Inquiry Manager correction, 2026-10-30): "the
+# Quotation ... will be approved and shared to marketer." The Quotation
+# itself is built from a submitted Supplier Comparative Statement (see
+# create_quotation_from_comparative_statement, supplier_comparative_
+# statement.py), landing with quotation_approval_status = "Pending
+# Approval" (setup_quotation_integration, install.py); these two
+# whitelisted actions are what moves it from there.
+# ---------------------------------------------------------------------------
+
+QUOTATION_APPROVAL_ROLES = {"Commercial Manager", "System Manager"}
+
+
+@frappe.whitelist()
+def approve_quotation(quotation_name):
+	"""Commercial Manager/System Manager only -- deliberately a separate,
+	explicit action rather than a plain field edit (same reasoning as
+	assign_commercial_officer above): Purchase Order/Indent creation
+	(create_purchase_orders_from_quotation / create_indents_from_quotation,
+	supplier_comparative_statement.py) now requires this to have already
+	happened."""
+	if not (QUOTATION_APPROVAL_ROLES & set(frappe.get_roles(frappe.session.user))):
+		frappe.throw(_("Only a Commercial Manager can approve a Quotation."), frappe.PermissionError)
+
+	quotation = frappe.get_doc("Quotation", quotation_name)
+	quotation.check_permission("read")
+	if quotation.docstatus != 1:
+		frappe.throw(_("Only a submitted Quotation can be approved."))
+	if quotation.get("quotation_approval_status") == "Approved":
+		return quotation.name
+
+	quotation.db_set("quotation_approval_status", "Approved")
+	quotation.db_set("approved_by", frappe.session.user)
+	quotation.db_set("approved_on", frappe.utils.now_datetime())
+
+	if quotation.get("inquiry"):
+		advance_inquiry_commercial_status(quotation.inquiry, "Quotation Approved")
+
+	return quotation.name
+
+
+@frappe.whitelist()
+def share_quotation_with_marketer(quotation_name):
+	"""The final handoff: once approved, give the Inquiry's own assigned
+	Marketer read access to the Quotation (frappe.share.add -- the same
+	native per-document sharing every "Share" button in the Desk UI uses)
+	and email them, so they see exactly what's being offered to their
+	Customer without needing Commercial-team access to anything else."""
+	if not (QUOTATION_APPROVAL_ROLES | {"Commercial Officer"}) & set(frappe.get_roles(frappe.session.user)):
+		frappe.throw(_("You do not have permission to share this Quotation."), frappe.PermissionError)
+
+	quotation = frappe.get_doc("Quotation", quotation_name)
+	quotation.check_permission("read")
+	if quotation.get("quotation_approval_status") != "Approved":
+		frappe.throw(_("This Quotation must be approved before it can be shared with the Marketer."))
+	if not quotation.get("inquiry"):
+		frappe.throw(_("This Quotation has no linked Inquiry to find the Marketer from."))
+
+	marketer_user = frappe.db.get_value(
+		"Marketer", frappe.db.get_value("Inquiry", quotation.inquiry, "marketer"), "user"
+	)
+	if not marketer_user:
+		frappe.throw(_("The Inquiry's assigned Marketer has no linked User to share this with."))
+
+	import frappe.share
+
+	frappe.share.add_docshare(
+		"Quotation", quotation.name, marketer_user, read=1, notify=1, flags={"ignore_share_permission": True}
+	)
+
+	quotation.db_set("shared_with_marketer", 1)
+	quotation.db_set("shared_on", frappe.utils.now_datetime())
+	advance_inquiry_commercial_status(quotation.inquiry, "Shared to Marketer")
+
+	return marketer_user

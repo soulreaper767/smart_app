@@ -99,7 +99,7 @@
    "reqd": 1
   },
   {
-   "fetch_from": "request_for_quotation.quotation",
+   "description": "Set once this statement's winning selection is used to build a Quotation (\"Create > Quotation\") -- not fetched from the Request for Quotation any more (that direction -- RFQ built from a Quotation -- no longer exists; the Quotation is built from this statement now).",
    "fieldname": "quotation",
    "fieldtype": "Link",
    "label": "Quotation",

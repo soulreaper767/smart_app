@@ -161,7 +161,16 @@ def sync_marketer_user_permission_for_user(doc, method=None):
 		sync_marketer_user_permission(frappe.get_doc("Marketer", marketer))
 
 
-COMMERCIAL_STATUS_ORDER = ["Unassigned", "Assigned", "Quotation Created", "RFQ Created", "RFQ Sent"]
+COMMERCIAL_STATUS_ORDER = [
+	"Unassigned",
+	"Assigned",
+	"RFQ Created",
+	"RFQ Sent",
+	"Comparative Statement Completed",
+	"Quotation Created",
+	"Quotation Approved",
+	"Shared to Marketer",
+]
 
 
 def sync_commercial_officer_user_permission(doc, method=None):
@@ -196,9 +205,19 @@ def sync_commercial_officer_user_permission(doc, method=None):
 
 def advance_inquiry_commercial_status(inquiry_name, new_status):
 	"""Only ever moves commercial_status forward (Unassigned -> Assigned ->
-	Quotation Created -> RFQ Created -> RFQ Sent), never backward — e.g. a
-	second Quotation created after an RFQ has already gone out shouldn't
-	reset the status to "Quotation Created"."""
+	RFQ Created -> RFQ Sent -> Comparative Statement Completed -> Quotation
+	Created -> Quotation Approved -> Shared to Marketer -- see
+	COMMERCIAL_STATUS_ORDER above), never backward -- e.g. a second RFQ
+	created after the Comparative Statement is already done shouldn't reset
+	the status to "RFQ Created".
+
+	The Quotation is now built from the Comparative Statement, not the
+	other way round (Inquiry Manager correction, 2026-10-30: "RFQ ... After
+	comparison of prices he will prepare the Quotation that will be
+	approved and shared to marketer") -- Quotation Created/Approved/Shared
+	to Marketer therefore sit AFTER RFQ Sent/Comparative Statement
+	Completed in this order, not before RFQ Created as the original build
+	had it."""
 	if not inquiry_name:
 		return
 
@@ -229,6 +248,17 @@ def update_inquiry_on_rfq_submit(doc, method=None):
 	since submission is the precondition for send_supplier_emails to work."""
 	if doc.get("inquiry"):
 		advance_inquiry_commercial_status(doc.inquiry, "RFQ Sent")
+
+
+def advance_inquiry_on_comparative_statement_submit(doc, method=None):
+	"""Supplier Comparative Statement.on_submit: advance the source
+	Inquiry's commercial_status once supplier prices have actually been
+	compared and a winner picked for every item (before_submit's own gate)
+	-- the precondition for preparing the Quotation
+	(create_quotation_from_comparative_statement, supplier_comparative_
+	statement.py)."""
+	if doc.get("inquiry"):
+		advance_inquiry_commercial_status(doc.inquiry, "Comparative Statement Completed")
 
 
 def enforce_single_preferred_supplier(doc, method=None):
@@ -394,6 +424,152 @@ def ensure_customer_for_supplier(supplier_name):
 	)
 	customer.insert(ignore_permissions=True, ignore_mandatory=True)
 	return customer.name
+
+
+# ---------------------------------------------------------------------------
+# Quotation, Purchase Order and Indent now always transact in US$, never the
+# party's/company's own PKR -- an explicit correction (2026-10-30): "Quotation,
+# PO and Indents will be in US$ instead PKR." Indent isn't a real accounting
+# doctype (no GL, no party-currency check at all), so forcing its currency is
+# trivial (see Indent.validate, indent.py). Quotation and Purchase Order both
+# extend AccountsController, whose own validate_currency (erpnext.controllers.
+# accounts_controller) throws InvalidCurrency the instant `self.currency`
+# disagrees with the party's resolved receivable/payable account currency,
+# UNLESS that account's own currency already equals the Company's default
+# currency -- confirmed against the live site (bench site1.local): Company
+# "Smart Chemicals" has `default_currency` = USD, but its default Debtors/
+# Creditors accounts ("1310 - Debtors - SC" / "2110 - Creditors - SC") were
+# themselves set up in PKR, which is exactly why every Quotation/PO hit
+# InvalidCurrency against a PKR-only Customer/Supplier before this fix.
+#
+# The sanctioned, documented ERPNext mechanism for a party to transact in a
+# currency other than its account default is a `Party Account` override row
+# (Customer.accounts / Supplier.accounts, one row per Company -- see
+# erpnext.accounts.party.get_party_account) pointing at a dedicated account
+# in the wanted currency (ensure_usd_trade_account/setup_usd_trade_accounts,
+# install.py create the two shared ones this app uses: "Debtors USD"/
+# "Creditors USD"). ensure_usd_party_account below adds that override
+# row the first time a given Customer/Supplier is used in this app's USD
+# workflow, and leaves it alone once it already matches.
+#
+# One real, unavoidable limit, confirmed against erpnext.accounts.party.
+# get_party_account's own source: once ANY GL Entry already exists for a
+# party+Company (any submitted Sales/Purchase Invoice against them, in any
+# currency), that party is permanently pinned to the currency of its FIRST
+# such entry for that Company -- get_party_account calls
+# get_party_gle_account instead of honouring the override the moment
+# get_party_gle_currency returns anything at all, and Party Account itself
+# refuses a second row per Company (DuplicatePartyAccountError). This isn't
+# a bug to route around -- it's ERPNext deliberately protecting accounting
+# integrity -- so ensure_usd_party_account below checks for this up front
+# and leaves a party with existing non-USD GL history exactly as it is,
+# letting Frappe's own validate_currency explain the real constraint if a
+# USD Quotation/PO is ever attempted against them specifically. A brand new
+# Customer/Supplier (the normal case going forward) has no GL history yet,
+# so the override always takes effect cleanly for them.
+# ---------------------------------------------------------------------------
+
+TRADE_CURRENCY = "USD"
+
+
+def ensure_usd_trade_account(party_type, company):
+	"""Returns (creating once, idempotently, if missing) the one shared
+	USD-denominated Receivable/Payable account this app's Quotation/
+	Purchase Order workflow points every Customer/Supplier's Party Account
+	override at for `company`. A sibling of the Company's own default
+	receivable/payable account -- same parent group, same Company, only
+	the name and `account_currency` differ."""
+	default_account_fieldname = (
+		"default_receivable_account" if party_type == "Customer" else "default_payable_account"
+	)
+	default_account = frappe.get_cached_value("Company", company, default_account_fieldname)
+	if not default_account:
+		frappe.throw(
+			frappe._("Company {0} has no default {1} account set.").format(
+				company, "Receivable" if party_type == "Customer" else "Payable"
+			)
+		)
+
+	label = "Debtors USD" if party_type == "Customer" else "Creditors USD"
+	account_name = frappe.db.get_value(
+		"Account", {"company": company, "account_name": label}, "name"
+	)
+	if account_name:
+		return account_name
+
+	parent_account = frappe.get_cached_value("Account", default_account, "parent_account")
+	account = frappe.get_doc(
+		{
+			"doctype": "Account",
+			"company": company,
+			"account_name": label,
+			"parent_account": parent_account,
+			"account_currency": TRADE_CURRENCY,
+			"account_type": "Receivable" if party_type == "Customer" else "Payable",
+			"is_group": 0,
+		}
+	)
+	account.insert(ignore_permissions=True)
+	return account.name
+
+
+def ensure_usd_party_account(party_type, party, company):
+	"""Idempotently points `party`'s Party Account override for `company` at
+	the shared USD trade account (ensure_usd_trade_account above) -- called
+	from Quotation/Purchase Order's own validate (see force_trade_currency_
+	quotation/force_trade_currency_purchase_order below) right before their
+	own `currency` is forced to USD, so erpnext.controllers.accounts_
+	controller.validate_currency never has anything to object to for a
+	party with no existing GL history. See the module comment above this
+	section for the one case (a party with existing non-USD GL Entries)
+	where this deliberately does nothing, by design."""
+	if not (party_type and party and company):
+		return
+
+	from erpnext.accounts.party import get_party_gle_currency
+
+	existing_gle_currency = get_party_gle_currency(party_type, party, company)
+	if existing_gle_currency and existing_gle_currency != TRADE_CURRENCY:
+		return
+
+	usd_account = ensure_usd_trade_account(party_type, company)
+
+	party_doc = frappe.get_doc(party_type, party)
+	row = next((r for r in party_doc.get("accounts") or [] if r.company == company), None)
+	if row:
+		if row.account == usd_account:
+			return
+		row.account = usd_account
+	else:
+		party_doc.append("accounts", {"company": company, "account": usd_account})
+
+	party_doc.save(ignore_permissions=True)
+
+
+def force_trade_currency_quotation(doc, method=None):
+	"""Quotation.before_validate (hooks.py -- deliberately before_validate,
+	not validate: see the comment there on why validate is one step too
+	late) -- always US$, regardless of the Customer's own default
+	currency. Only meaningful for a Quotation addressed to a Customer
+	(quotation_to == "Customer", this app's only real use of Quotation); a
+	Lead has no account/GL currency to reconcile against at all, so
+	there's nothing to force there."""
+	if doc.quotation_to != "Customer" or not doc.party_name:
+		return
+	ensure_usd_party_account("Customer", doc.party_name, doc.company)
+	doc.currency = TRADE_CURRENCY
+
+
+def force_trade_currency_purchase_order(doc, method=None):
+	"""Purchase Order.before_validate (hooks.py) -- always US$, regardless
+	of the Supplier's own default currency. See the module comment above
+	this section for the full reasoning (identical mechanism to Quotation,
+	mirrored for Supplier/payable instead of Customer/receivable), and the
+	before_validate-not-validate comment on Quotation's hooks.py entry."""
+	if not doc.supplier:
+		return
+	ensure_usd_party_account("Supplier", doc.supplier, doc.company)
+	doc.currency = TRADE_CURRENCY
 
 
 def create_default_price_list_for_customer(doc, method=None):

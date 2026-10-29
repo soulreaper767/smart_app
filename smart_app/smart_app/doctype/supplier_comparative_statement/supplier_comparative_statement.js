@@ -6,6 +6,7 @@ frappe.ui.form.on("Supplier Comparative Statement", {
 		frm.trigger("set_status_indicator");
 		frm.trigger("show_get_items_from_rfq_button");
 		frm.trigger("show_refresh_rates_button");
+		frm.trigger("show_create_quotation_button");
 	},
 
 	set_status_indicator: function (frm) {
@@ -109,5 +110,29 @@ frappe.ui.form.on("Supplier Comparative Statement", {
 				},
 			});
 		});
+	},
+
+	show_create_quotation_button: function (frm) {
+		// Corrected pipeline (Inquiry Manager correction, 2026-10-30):
+		// "After comparison of prices he will prepare the Quotation." Once
+		// this statement is submitted (every item has a winning Supplier --
+		// before_submit's own gate) and doesn't already have a Quotation,
+		// this is the one entry point for preparing it.
+		if (frm.doc.docstatus === 1 && !frm.doc.quotation && frappe.model.can_create("Quotation")) {
+			frm.add_custom_button(__("Quotation"), function () {
+				frappe.call({
+					method:
+						"smart_app.smart_app.doctype.supplier_comparative_statement.supplier_comparative_statement.create_quotation_from_comparative_statement",
+					args: { comparative_statement_name: frm.doc.name },
+					freeze: true,
+					freeze_message: __("Preparing Quotation..."),
+					callback: function (r) {
+						if (r.message) {
+							frappe.set_route("Form", "Quotation", r.message);
+						}
+					},
+				});
+			}, __("Create"));
+		}
 	},
 });

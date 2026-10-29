@@ -45,7 +45,7 @@ frappe.ui.form.on("Inquiry", {
 		frm.trigger("show_create_customer_button");
 		frm.trigger("show_assign_button");
 		frm.trigger("show_submit_button");
-		frm.trigger("show_create_quotation_button");
+		frm.trigger("show_create_rfq_button");
 
 		// status_change_reason only ever makes sense for the *next* edit --
 		// a freshly loaded/saved doc has nothing pending, so start hidden
@@ -108,18 +108,33 @@ frappe.ui.form.on("Inquiry", {
 		}
 	},
 
-	show_create_quotation_button: function (frm) {
-		// Mirrors ERPNext's own Opportunity -> "Create > Quotation" button
-		// exactly (same frappe.model.open_mapped_doc call), so a Commercial
-		// Officer/Manager doesn't have to go the other way round (open a
-		// blank Quotation and use "Get Items From") just to start one.
-		if (frm.doc.docstatus === 1 && frappe.model.can_create("Quotation")) {
+	show_create_rfq_button: function (frm) {
+		// Corrected pipeline (Inquiry Manager correction, 2026-10-30):
+		// "Inquiry will be assigned 1st and then commercial officer will
+		// send the RFQ to the suppliers." The Request for Quotation is
+		// built straight from this Inquiry now -- there's no Quotation yet
+		// at this point; that only gets prepared later, from the Supplier
+		// Comparative Statement, once prices have been compared (see
+		// create_quotation_from_comparative_statement,
+		// supplier_comparative_statement.py).
+		if (
+			frm.doc.docstatus === 1 &&
+			frm.doc.commercial_officer &&
+			frappe.model.can_create("Request for Quotation")
+		) {
 			frm.add_custom_button(
-				__("Quotation"),
+				__("Request for Quotation"),
 				function () {
-					frappe.model.open_mapped_doc({
-						method: "smart_app.smart_app.doctype.inquiry.inquiry.make_quotation",
-						frm: frm,
+					frappe.call({
+						method: "smart_app.smart_app.doctype.inquiry.inquiry.create_request_for_quotation",
+						args: { inquiry_name: frm.doc.name },
+						freeze: true,
+						freeze_message: __("Preparing Request for Quotation..."),
+						callback: function (r) {
+							if (r.message) {
+								frappe.set_route("Form", "Request for Quotation", r.message);
+							}
+						},
 					});
 				},
 				__("Create")

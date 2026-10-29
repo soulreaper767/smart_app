@@ -76,7 +76,7 @@ branding. All covered in detail further down.
 | `shipment_mode` / `payment_mode` / `incoterm` | Links to the three manager-editable master lists |
 | `amended_from` | standard field for a submittable doctype |
 | `commercial_officer` | Link → User, `allow_on_submit` — set by Commercial Manager once submitted; restricted by query to Commercial Officer role holders |
-| `commercial_status` | Unassigned / Assigned / Quotation Created / RFQ Created / RFQ Sent — read-only, advanced automatically as the Commercial pipeline progresses, never manually edited. Independent of `inquiry_status` (Open/Quotation/Replied/...) by design: `inquiry_status` tracks the customer-facing conversation (owned by Marketer/Inquiry Officer's Workflow), `commercial_status` tracks the internal Commercial-team pipeline once submitted — they're two separate dimensions, not different labels for the same thing, so `inquiry_status` intentionally never shows "Assigned" |
+| `commercial_status` | Unassigned / Assigned / RFQ Created / RFQ Sent / Comparative Statement Completed / Quotation Created / Quotation Approved / Shared to Marketer — read-only, advanced automatically as the Commercial pipeline progresses, never manually edited. Reordered 2026-10-30 (RFQ now comes before Quotation — see the pipeline section below). Independent of `inquiry_status` (Open/Quotation/Replied/...) by design: `inquiry_status` tracks the customer-facing conversation (owned by Marketer/Inquiry Officer's Workflow), `commercial_status` tracks the internal Commercial-team pipeline once submitted — they're two separate dimensions, not different labels for the same thing, so `inquiry_status` intentionally never shows "Assigned" |
 | `notes` | free text |
 
 ## Roles & permissions
@@ -535,76 +535,146 @@ All of these (plus shortcuts to the Suppliers, Quotation, RFQ and Supplier
 Quotation lists, the Commercial Dashboard, and the two core reports below)
 live under a **Commercial Team** section on the Smart App workspace.
 
-## Quotation → Request for Quotation pipeline
+## Inquiry → Request for Quotation → Supplier Comparative Statement → Quotation pipeline
 
-Once an Inquiry is **submitted** and assigned, a Commercial Officer can
-start the Quotation from *either* side, both ending up at the same
-`make_quotation` mapper:
-- From the **Inquiry** itself: **Create → Quotation** (mirrors ERPNext's own
-  Opportunity → "Create > Quotation" button exactly, same
-  `frappe.model.open_mapped_doc` call).
-- From a blank **Quotation**: **Get Items From → Inquiry**, filtered to
-  Inquiries assigned to the current Commercial Officer (`commercial_officer`
-  = session user, `docstatus = 1`) — mirroring how ERPNext does the same
-  thing for Opportunity → Quotation.
+**Corrected 2026-10-30** (Inquiry Manager correction — the original build
+had this backwards, Quotation before RFQ): *"Inquiry will be assigned 1st
+and then commercial officer will send the RFQ to the suppliers. After
+comparison of prices he will prepare the Quotation that will be approved
+and shared to marketer."* The Quotation is now the **last** document
+prepared in this pipeline, not the first — it's built from the Supplier
+Comparative Statement's own winning selection, using the real negotiated
+rate, never an earlier estimate. There is no longer any Inquiry → Quotation
+direct path (`make_quotation` and the Inquiry's old "Create → Quotation"
+button are gone).
 
-From that Quotation, a second button — **Create → Request for Quotation**
-— builds a *draft* RFQ: every item carried over (Item, Qty, a 7-day
-schedule date, UOM/Stock UOM from the Item master), and every supplier of
-every one of those items (`Item.supplier_items` — deliberately *all* of
-them, since an item commonly has multiple suppliers, trader and
+**Stage 1 — Request for Quotation, straight from the Inquiry.** Once an
+Inquiry is **submitted** and assigned to a Commercial Officer, **Create →
+Request for Quotation** (on the Inquiry itself) builds a *draft* RFQ
+directly from its items: every Inquiry Item carried over (Item, Qty, a
+7-day schedule date, UOM/Stock UOM from the Item master), and every
+supplier of every one of those items (`Item.supplier_items` — deliberately
+*all* of them, since an item commonly has multiple suppliers, trader and
 manufacturer alike, and the RFQ should reach every one) added to the
-Suppliers table with their default Contact's email. It's left as a draft
-deliberately, so a Commercial Officer can review it before anything reaches
-a supplier — most usefully, delete any supplier row they don't actually want
-this RFQ to go to (plain grid-row delete, already available on any draft
-Request for Quotation they have write access to, no customisation needed).
+Suppliers table with their default Contact's email. The reverse direction
+— a blank Request for Quotation's **"Get Items From → Inquiry"** button
+(`RFQ_CLIENT_SCRIPT_JS`) — does the same thing via `get_request_for_quotation_data`
+(`inquiry.py`), filtered server-side to submitted, assigned Inquiries. Both
+are left as a draft deliberately, so a Commercial Officer can review it
+before anything reaches a supplier — most usefully, delete any supplier row
+they don't actually want this RFQ to go to (plain grid-row delete, already
+available on any draft Request for Quotation they have write access to).
 
-**It works the other way round too.** Request for Quotation gets its own
-`quotation` Custom Field (Link → Quotation, alongside the existing `inquiry`
-one) — distinct fields for a reason: `quotation` traces this RFQ to the
-specific Quotation it came from, while `inquiry` traces the whole chain
-further back to the originating Inquiry, which isn't always the same thing
-(an RFQ started via the button below, from a Quotation that wasn't itself
-generated from an Inquiry, has `quotation` set but `inquiry` blank).
-`backfill_rfq_quotation_links` fills this in for RFQs that already existed
-before the field did, wherever exactly one Quotation matches the RFQ's
-`inquiry` unambiguously.
+**Sending the RFQ.** `setup_quotation_integration` adds a Client Script on
+Request for Quotation: a **"Submit & Send to Suppliers"** button (visible
+on any draft that has at least one supplier row), which — after a one-line
+confirm — ticks a hidden `send_email_on_submit` Custom Field and calls
+`frm.savesubmit()`. A Commercial Officer doesn't need to separately find
+and click the native (and easy to miss) "Send Emails to Suppliers" button
+afterwards — submitting via this button **is** sending. That button still
+exists natively for a later re-send, e.g. if a supplier's contact was fixed
+after the fact.
 
-The RFQ client script (same file, `RFQ_CLIENT_SCRIPT_JS`) adds the reverse
-entry point: a **"Get Items From → Quotation"** button on a *blank* Request
-for Quotation, prompting for a Quotation (filtered server-side — see
-below) and filling in the form already open in the browser: items,
-suppliers, and the `quotation`/`inquiry` traceability fields all populate
-together in one action, via plain `frm.set_value` /
-`frm.clear_table("items")` + `frm.add_child(...)` calls in the callback —
-not `erpnext.utils.map_current_doc`. That was tried first (it's the
-mechanism Quotation's own "Get Items From → Inquiry" button uses), but its
-`MultiSelectDialog` + `frappe.model.mapper.map_docs` pipeline is built
-around picking one-or-more *rows* to pull into an existing table, not
-cloning one whole source document's data onto a blank one — it didn't work
-reliably for this direction, so this uses direct data-fetch instead. The
-server side is `get_request_for_quotation_data` (`inquiry.py`), which
-builds an in-memory (never inserted) RFQ using the exact same
-`_populate_rfq_suppliers_and_template` logic as `create_request_for_quotation`
-and returns it as plain data. `create_request_for_quotation` itself is
-unchanged for the other direction (the "Create → Request for Quotation"
-button on an already-open Quotation), where there's no blank RFQ open to
-fill in place, so creating a fresh document and navigating to it is the
-correct behaviour there.
+**The native "Submit" toolbar button, deliberately, never sends.** ERPNext's
+own `on_submit` for Request for Quotation unconditionally calls
+`self.send_to_supplier()` — so on a site with no outgoing Email Account
+configured, even a *plain* Submit (not this app's own button at all) failed
+outright trying to email suppliers nobody asked to email yet. Since that
+call is inside the core controller's own `on_submit` method, no
+`doc_events` hook can intercept it — only a real subclass can, so
+`CustomRequestForQuotation` (`smart_app/smart_app/overrides.py`, wired via
+`override_doctype_class` in `hooks.py`) replaces `on_submit` with the same
+status/reset logic, but only calls `send_to_supplier()` when
+`send_email_on_submit` is checked. The "Submit & Send to Suppliers" button
+is the only place that ever checks it (as part of the same save+submit
+request, so it lands correctly regardless of whether the form had other
+unsaved edits) — the plain native Submit leaves it unchecked and just
+submits, no email, no Email Account required.
 
-Both `quotation` and `inquiry` are locked to that button as their only
-entry point — `quotation` via a **Property Setter** (`read_only: 1`, so it's
-still visible as confirmation of what this RFQ was generated from, but
-never hand-editable), `inquiry` via a Property Setter (`hidden: 1`, since
-it's internal chain-tracing that isn't useful for a Commercial Officer
-looking at the form). The Quotation picker itself
-(`get_quotations_for_rfq` in `inquiry.py`) only ever offers a Commercial
-Officer their **own** Quotations (`owner = ` the current user — Quotation
-has no `commercial_officer` field of its own the way Inquiry does, but a
-Commercial Officer only ever creates one for an Inquiry already scoped to
-themselves, so `owner` is an accurate stand-in); Commercial Manager/System
-Manager see every submitted Quotation, for oversight.
+Sending (via "Submit & Send to Suppliers") still requires the site's
+Portal Settings to have Request for Quotation enabled (ERPNext's own
+`check_portal_enabled`) — since every supplier gets a link back to submit
+their reply on the buying portal, which is also the "corporate format" body:
+`RFQ_EMAIL_TEMPLATE_BODY` in `install.py` renders the actual item table
+(name/qty/UOM/required-by) plus that portal link and (for a first-time
+supplier contact) a set-password link, in one styled HTML block — using
+whatever's already on the RFQ (items, company, supplier) rather than asking
+anyone to type a new email each time.
+
+**Stage 2 — preparing the Quotation, once prices are compared.** Once a
+submitted Supplier Comparative Statement has a winning Supplier selected
+for every item (see below), **"Create → Quotation"** on it builds a draft
+Quotation addressed to the Inquiry's own Customer, with every winning row's
+`(item, qty, rate)` carried over exactly as selected — no markup, same
+no-markup sourcing Indent/Purchase Order already use (`create_quotation_from_comparative_statement`,
+`supplier_comparative_statement.py`). The reverse **"Get Items From →
+Supplier Comparative Statement"** button on a *blank* Quotation
+(`QUOTATION_CLIENT_SCRIPT_JS`) does the same via `get_quotation_data_from_comparative_statement`.
+Both are gated to statements that don't already have a Quotation built from
+them (`get_comparative_statements_for_quotation`'s own filter).
+
+**Stage 3 — approval, then sharing with the Marketer.** A submitted
+Quotation lands with `quotation_approval_status = "Pending Approval"`.
+**"Approve"** (Commercial Manager/System Manager only, `approve_quotation`
+in `inquiry.py`) flips it to `"Approved"` and stamps `approved_by`/
+`approved_on`. Once approved, **"Share with Marketer"** (Commercial
+Officer/Manager, `share_quotation_with_marketer`) gives the Inquiry's own
+assigned Marketer read access via `frappe.share.add_docshare` — the same
+native per-document sharing any "Share" button in the Desk UI uses — and
+emails them, so they see exactly what's being offered to their Customer
+without needing Commercial-team access to anything else. Both actions are
+one-way (no un-approve/un-share) and both advance `commercial_status`
+(`Quotation Approved` / `Shared to Marketer`).
+
+**Quotation, Purchase Order and Indent always transact in US$.** Forced on
+every save (`force_trade_currency_quotation` / `force_trade_currency_purchase_order`
+in `utils.py`, `Indent.force_trade_currency`), regardless of the Customer's/
+Supplier's own default currency — a 2026-10-30 correction ("Quotation, PO
+and Indents will be in US$ instead PKR"). Confirmed against the live site
+and `erpnext.controllers.accounts_controller.validate_currency`'s own
+source: Company "Smart Chemicals" has `default_currency = USD`, but its
+default Debtors/Creditors accounts were themselves set up in PKR, so a
+Customer/Supplier with no override account is pinned to PKR the instant
+`validate_currency` runs. `ensure_usd_party_account` (`utils.py`) adds a
+**Party Account** override (Customer.accounts / Supplier.accounts, the
+documented ERPNext mechanism for a party to transact in a non-default
+currency — see `erpnext.accounts.party.get_party_account`) pointing at a
+shared "Debtors USD" / "Creditors USD" account (`setup_usd_trade_accounts`)
+the first time a given party is used in this workflow, and leaves it alone
+once it already matches. One real, unavoidable limit, confirmed against
+the same source: once a party already has a submitted Sales/Purchase
+Invoice in a different currency for this Company, ERPNext permanently pins
+their account to that currency (`get_party_gle_currency` /
+`get_party_gle_account`) — this is accounting-integrity protection, not a
+bug, so `ensure_usd_party_account` detects it and leaves that party alone,
+letting the native `InvalidCurrency` error explain the real constraint if a
+USD Quotation/PO is ever attempted against them specifically. A brand new
+Customer/Supplier (the normal case going forward) has no GL history yet, so
+the override always takes effect cleanly. Commission Invoice is
+deliberately **not** part of this — its own Sales Invoice bills a
+dedicated billing Customer (`ensure_customer_for_supplier`) that stays on
+Company's own PKR default, so `_build_commission_invoice_from_indent` reads
+that Customer's actual resolved account currency instead of blindly
+inheriting `indent.currency`.
+
+**Managing multiple suppliers on an Item.** The native "Supplier Items"
+table on Item (Item Supplier child doctype) only ever carried `supplier` +
+`supplier_part_no` — enough to *list* several suppliers, but nothing to
+actually tell them apart. `setup_item_supplier_customization` in
+`install.py` adds two **Custom Fields** to it:
+- **Supplier Type** (`supplier_type`, Select: Manufacturer / Trader /
+  Distributor / Other) — so a mixed set of sources on one Item stays
+  legible at a glance.
+- **Preferred** (`is_preferred_supplier`, Check) — flags which one is the
+  default source when several are on file. `enforce_single_preferred_supplier`
+  (`utils.py`, hooked to Item's `validate`) keeps this to at most one row at
+  a time — checking a second one silently unchecks the earlier one rather
+  than blocking the save with an error.
+
+This doesn't change how RFQ generation itself works — `create_request_for_quotation`
+still blasts every supplier on every item regardless of type or preference,
+since "send RFQ to all of them" was the whole point; Preferred/Type are for
+a human scanning the Item form, not a filter on who gets contacted.
 
 **Sending the RFQ.** `setup_quotation_integration` adds one more Client
 Script, on Request for Quotation this time: a **"Submit & Send to
@@ -703,19 +773,20 @@ submittable, `smart_app/smart_app/doctype/supplier_comparative_statement/`):
 
 **Back on the Quotation**, two buttons — **"Create → Purchase Order"** and
 **"Create → Indent"** — are both visible as soon as the Quotation itself is
-submitted (so they're discoverable), but both call
-`_require_comparative_statement` first: if no submitted Supplier
-Comparative Statement exists yet for this Quotation, clicking either shows
-a clear error explaining what's still needed, rather than either button
-being hidden with no explanation. Once a statement is submitted, both work
-off `_selected_rows_by_supplier` — the exact same grouping of the exact
-same winning selection, item rate/qty/Supplier included, so a Purchase
-Order and an Indent for the same Quotation always source identically ("same
-links to get items from," verbatim). If the winning selection spans more
-than one Supplier (different items awarded to different suppliers), one
-Purchase Order *and* one Indent is created **per Supplier** automatically,
-and the button navigates to a filtered list instead of a single form; with
-one Supplier, it navigates straight to the one document created.
+submitted (so they're discoverable), but both call `_require_approved_quotation`
+and `_require_comparative_statement` first: if the Quotation isn't approved
+yet (see "Stage 3 — approval" above), or no submitted Supplier Comparative
+Statement exists for it, clicking either shows a clear error explaining
+what's still needed, rather than either button being hidden with no
+explanation. Once approved, both work off `_selected_rows_by_supplier` —
+the exact same grouping of the exact same winning selection, item
+rate/qty/Supplier included, so a Purchase Order and an Indent for the same
+Quotation always source identically ("same links to get items from,"
+verbatim). If the winning selection spans more than one Supplier (different
+items awarded to different suppliers), one Purchase Order *and* one Indent
+is created **per Supplier** automatically, and the button navigates to a
+filtered list instead of a single form; with one Supplier, it navigates
+straight to the one document created.
 
 The reverse **"Get Items From → Quotation"** button on a *blank* Indent
 (`indent.js`) uses this same gate — it only works when the Comparative
@@ -748,7 +819,9 @@ not the trade's own Sales Invoice — is what actually posts revenue.
 
 A parallel, optional pipeline still exists for whatever paperwork the
 Commercial team wants for the trade itself, forking off the same Quotation
-the buying pipeline (Quotation → RFQ → Supplier Quotation) already uses:
+the buying pipeline (Inquiry → RFQ → Supplier Quotation → Supplier
+Comparative Statement → Quotation, see above) already produces, further
+downstream now than it used to be:
 **Quotation → Sales Order → Sales Invoice**. Entirely native ERPNext, both
 directions at each step (Quotation's own **"Create → Sales Order"**
 button and the reverse **"Get Items From → Quotation"** on a blank Sales
@@ -1266,22 +1339,26 @@ single-currency trading desk, but worth knowing if you deal in more than
 one currency per party.
 
 `commercial_status` advances automatically and only ever forward (never
-backward, e.g. a second Quotation created after an RFQ already went out
-won't reset it): "Quotation Created" on the Quotation's `after_insert`,
-"RFQ Created" once `create_request_for_quotation` builds the draft, "RFQ
-Sent" on the RFQ's `on_submit` (submission being the actual precondition
-for `send_supplier_emails` to work).
+backward, e.g. a second RFQ created after the Comparative Statement is
+already done won't reset it): "RFQ Created" once `create_request_for_quotation`
+builds the draft, "RFQ Sent" on the RFQ's `on_submit` (submission being the
+actual precondition for `send_supplier_emails` to work), "Comparative
+Statement Completed" on the statement's own `on_submit`, "Quotation
+Created" on the Quotation's `after_insert`, "Quotation Approved"/"Shared to
+Marketer" from `approve_quotation`/`share_quotation_with_marketer`
+directly. Reordered 2026-10-30 — RFQ now comes before Quotation (see
+`COMMERCIAL_STATUS_ORDER`, `utils.py`).
 
 None of this touches any ERPNext source file: `setup_quotation_integration`
-in `install.py` adds one **Client Script** on Quotation (both buttons, the
-second mirroring ERPNext's own Opportunity → Quotation button exactly via
-`erpnext.utils.map_current_doc`) and a **Custom Field** `inquiry` (Link →
-Inquiry) on both Quotation and Request for Quotation for traceability. The
-server-side mappers — `make_quotation` and `create_request_for_quotation`
-in `inquiry.py` — mirror
-`erpnext.crm.doctype.opportunity.opportunity.make_quotation` and the RFQ
-supplier/contact lookup pattern from ERPNext's own
-`request_for_quotation.py`, respectively.
+in `install.py` adds Client Scripts on Inquiry/Request for Quotation/
+Quotation/Supplier Comparative Statement (each "Create"/"Get Items From"
+button pair) and Custom Fields (`inquiry`, `comparative_statement`,
+`quotation_approval_status`, `approved_by`/`approved_on`,
+`shared_with_marketer`/`shared_on`) on Quotation and Request for Quotation
+for traceability. The server-side builders — `create_request_for_quotation`
+(`inquiry.py`), `create_quotation_from_comparative_statement`
+(`supplier_comparative_statement.py`), and their "Get Items From" mirrors —
+all follow the same shared-builder pattern as everything else in this app.
 
 ### "Warehouse is mandatory for stock Item"
 
@@ -1464,12 +1541,15 @@ recomputing them without a real exchange rate would be a guess, not a fix.
 A Quotation quoted at `5000` in the old currency reads `5000 USD` after
 this runs — the number doesn't change, only its label.
 
-**Deliberately not touched**: Purchase Order, Sales Invoice, Purchase
-Invoice, Payment Entry, and GL Entry — this app never creates or owns those
-records (Purchase Order is granted select+read only, for reference — see
-`grant_commercial_access`), and relabeling a *posted* accounting document's
-currency without also reworking its GL Entries is a books-integrity risk
-outside this app's remit.
+**Deliberately not touched**: Sales Invoice, Purchase Invoice, Payment
+Entry, and GL Entry — relabeling a *posted* accounting document's currency
+without also reworking its GL Entries is a books-integrity risk outside
+this app's remit. (Purchase Order was also excluded here when this
+migration was first written, on the grounds that this app only browsed
+ones raised elsewhere — that's since changed: see "Quotation, Purchase
+Order and Indent always transact in US$" above for the newer, ongoing,
+going-forward mechanism this app now uses instead, which is a different
+and more targeted fix than this one-time historical relabel.)
 
 Idempotent — checks the current value everywhere before writing, so
 re-running is always safe:

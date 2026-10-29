@@ -61,7 +61,16 @@ LOGISTICS_CHART_NAMES = [
 
 SHIPMENT_STATUSES = ["Pending Assignment", "Assigned", "In Progress", "Arrived", "Completed"]
 
-COMMERCIAL_STATUSES = ["Unassigned", "Assigned", "Quotation Created", "RFQ Created", "RFQ Sent"]
+COMMERCIAL_STATUSES = [
+	"Unassigned",
+	"Assigned",
+	"RFQ Created",
+	"RFQ Sent",
+	"Comparative Statement Completed",
+	"Quotation Created",
+	"Quotation Approved",
+	"Shared to Marketer",
+]
 
 WORKFLOW_ACTIONS = [
 	"Send for Quotation",
@@ -309,6 +318,7 @@ def setup():
 	run_step(setup_customer_marketer_field, "customer marketer field")
 	run_step(setup_commission_billing_field, "commission billing field (customer represents supplier)")
 	run_step(setup_commission_income_item, "commission income item (for the auto-generated Sales Invoice)")
+	run_step(setup_usd_trade_accounts, "US$ Debtors/Creditors accounts (Quotation/PO/Indent forced to USD)")
 	run_step(setup_workflow, "workflow")
 	run_step(setup_kanban_board, "kanban board")
 	run_step(setup_shipment_kanban, "shipment kanban board")
@@ -1222,8 +1232,22 @@ def setup_commercial_overview():
 	commercial_pipeline_filters = json.dumps([["Inquiry", "docstatus", "=", 1]])
 	if frappe.db.exists("Kanban Board", "Commercial Pipeline"):
 		board = frappe.get_doc("Kanban Board", "Commercial Pipeline")
+		changed = False
 		if board.filters != commercial_pipeline_filters:
 			board.filters = commercial_pipeline_filters
+			changed = True
+		# COMMERCIAL_STATUSES was reordered and extended (2026-10-30
+		# correction: RFQ now comes before Quotation, plus three new
+		# stages) -- a board created under the old 5-column list needs the
+		# new columns added too, not just a filters update. Only ever
+		# *adds* missing columns, never removes one -- an existing column
+		# might still have real cards on it.
+		existing_columns = {c.column_name for c in board.get("columns") or []}
+		for status in COMMERCIAL_STATUSES:
+			if status not in existing_columns:
+				board.append("columns", {"column_name": status})
+				changed = True
+		if changed:
 			board.save(ignore_permissions=True)
 	else:
 		board = frappe.new_doc("Kanban Board")
@@ -1464,60 +1488,123 @@ def _create_query_report(
 QUOTATION_CLIENT_SCRIPT_JS = """
 frappe.ui.form.on("Quotation", {
 	refresh: function (frm) {
-		if (frm.doc.docstatus === 0 && frappe.model.can_read("Inquiry")) {
+		// The Quotation is built from a submitted Supplier Comparative
+		// Statement now, never directly from an Inquiry -- corrected
+		// pipeline (Inquiry Manager correction, 2026-10-30): "After
+		// comparison of prices he will prepare the Quotation." Deliberately
+		// a plain Link prompt + explicit frm.set_value/clear_table/add_child,
+		// same pattern RFQ_CLIENT_SCRIPT_JS uses for its own "Get Items
+		// From > Inquiry" -- not erpnext.utils.map_current_doc, which is
+		// built around picking rows, not cloning one whole source
+		// document's data onto a blank one.
+		if (frm.is_new() && frappe.model.can_read("Supplier Comparative Statement")) {
 			frm.add_custom_button(
-				__("Inquiry"),
+				__("Supplier Comparative Statement"),
 				function () {
-					erpnext.utils.map_current_doc({
-						method: "smart_app.smart_app.doctype.inquiry.inquiry.make_quotation",
-						source_doctype: "Inquiry",
-						target: frm,
-						setters: [
+					frappe.prompt(
+						[
 							{
-								label: "Customer",
-								fieldname: "inquiry_source",
+								fieldname: "comparative_statement",
+								label: __("Supplier Comparative Statement"),
 								fieldtype: "Link",
-								options: "Customer",
-								default: frm.doc.party_name || undefined,
+								options: "Supplier Comparative Statement",
+								reqd: 1,
+								get_query: function () {
+									return {
+										query:
+											"smart_app.smart_app.doctype.supplier_comparative_statement.supplier_comparative_statement.get_comparative_statements_for_quotation",
+									};
+								},
 							},
 						],
-						get_query_filters: {
-							commercial_officer: frappe.session.user,
-							docstatus: 1,
+						function (values) {
+							frappe.call({
+								method:
+									"smart_app.smart_app.doctype.supplier_comparative_statement.supplier_comparative_statement.get_quotation_data_from_comparative_statement",
+								args: { comparative_statement_name: values.comparative_statement },
+								freeze: true,
+								freeze_message: __("Fetching items..."),
+								callback: function (r) {
+									if (!r.message) return;
+									const data = r.message;
+
+									frm.set_value("quotation_to", data.quotation_to);
+									frm.set_value("party_name", data.party_name);
+									frm.set_value("company", data.company);
+									frm.set_value("inquiry", data.inquiry);
+									frm.set_value("comparative_statement", data.comparative_statement);
+
+									frm.clear_table("items");
+									(data.items || []).forEach(function (row) {
+										frm.add_child("items", row);
+									});
+
+									frm.refresh_fields();
+									frm.dirty();
+								},
+							});
 						},
-					});
+						__("Get Items From Supplier Comparative Statement"),
+						__("Fetch")
+					);
 				},
 				__("Get Items From"),
 				"btn-default"
 			);
 		}
 
-		if (!frm.is_new() && frm.doc.items && frm.doc.items.length && frappe.model.can_create("Request for Quotation")) {
-			frm.add_custom_button(__("Request for Quotation"), function () {
-				frappe.call({
-					method: "smart_app.smart_app.doctype.inquiry.inquiry.create_request_for_quotation",
-					args: { quotation_name: frm.doc.name },
-					freeze: true,
-					freeze_message: __("Preparing Request for Quotation..."),
-					callback: function (r) {
-						if (r.message) {
-							frappe.set_route("Form", "Request for Quotation", r.message);
-						}
-					},
-				});
-			});
+		// Approve, then share with the Marketer -- the last two steps of
+		// the corrected pipeline, both Commercial Manager only (except
+		// sharing, which a Commercial Officer can also do once it's
+		// already approved -- see share_quotation_with_marketer).
+		if (frm.doc.docstatus === 1 && frm.doc.quotation_approval_status === "Pending Approval") {
+			if (frappe.user_roles.includes("Commercial Manager") || frappe.user_roles.includes("System Manager")) {
+				frm.add_custom_button(__("Approve"), function () {
+					frappe.confirm(__("Approve this Quotation?"), function () {
+						frappe.call({
+							method: "smart_app.smart_app.doctype.inquiry.inquiry.approve_quotation",
+							args: { quotation_name: frm.doc.name },
+							freeze: true,
+							freeze_message: __("Approving..."),
+							callback: function () {
+								frm.reload_doc();
+							},
+						});
+					});
+				}).addClass("btn-primary");
+			}
 		}
 
-		// Purchase Order and Indent are both gated on a submitted Supplier
-		// Comparative Statement (see supplier_comparative_statement.py) --
-		// its winning per-item Supplier selection is what both documents
-		// source their items/rates/Supplier from, grouped identically (one
-		// PO/Indent per distinct winning Supplier), so the two buttons
-		// below always read the exact same underlying data. The button
-		// itself is always shown once the Quotation is submitted, so it's
-		// discoverable -- clicking it before the Comparative Statement is
-		// submitted surfaces a clear error explaining what's still needed,
-		// rather than hiding the option entirely.
+		if (
+			frm.doc.docstatus === 1 &&
+			frm.doc.quotation_approval_status === "Approved" &&
+			!frm.doc.shared_with_marketer
+		) {
+			frm.add_custom_button(__("Share with Marketer"), function () {
+				frappe.call({
+					method: "smart_app.smart_app.doctype.inquiry.inquiry.share_quotation_with_marketer",
+					args: { quotation_name: frm.doc.name },
+					freeze: true,
+					freeze_message: __("Sharing..."),
+					callback: function () {
+						frm.reload_doc();
+					},
+				});
+			}).addClass("btn-primary");
+		}
+
+		// Purchase Order and Indent both require an Approved Quotation
+		// (_require_approved_quotation, supplier_comparative_statement.py)
+		// on top of the submitted Supplier Comparative Statement gate
+		// they've always had -- its winning per-item Supplier selection is
+		// what both documents source their items/rates/Supplier from,
+		// grouped identically (one PO/Indent per distinct winning
+		// Supplier), so the two buttons below always read the exact same
+		// underlying data. The buttons themselves are always shown once
+		// the Quotation is submitted, so they're discoverable -- clicking
+		// one before approval, or before the Comparative Statement is
+		// submitted, surfaces a clear error explaining what's still
+		// needed, rather than hiding the option entirely.
 		//
 		// Indent is deliberately sourced from Quotation, not Sales Order/
 		// Sales Invoice -- this app's revenue is the commission on the
@@ -1577,34 +1664,37 @@ frappe.ui.form.on("Quotation", {
 RFQ_CLIENT_SCRIPT_JS = """
 frappe.ui.form.on("Request for Quotation", {
 	refresh: function (frm) {
-		// The reverse direction of the "Request for Quotation" button on
-		// Quotation (see QUOTATION_CLIENT_SCRIPT_JS) -- that one goes
-		// Quotation -> new RFQ; this one lets someone start from a blank
-		// RFQ and pull items/suppliers from an existing Quotation instead,
-		// so the two doctypes are connected both ways. Deliberately a plain
-		// Link prompt (filtered server-side to Quotations owned by the
-		// current user, unless they're a Commercial Manager/System
-		// Manager) + explicit frm.set_value/clear_table/add_child, not
-		// erpnext.utils.map_current_doc -- that mechanism's
-		// MultiSelectDialog + generic mapper pipeline is built around
-		// picking one-or-more *rows* to pull into an existing table, not
-		// cloning one whole source document's data onto a blank one, and
-		// didn't suit this direction well.
-		if (frm.is_new() && frappe.model.can_read("Quotation")) {
+		// The reverse direction of the "Request for Quotation" button on a
+		// submitted, assigned Inquiry (inquiry.js) -- that one builds a new
+		// RFQ directly; this one lets someone start from a blank RFQ and
+		// pull items/suppliers from an existing Inquiry instead, so the two
+		// doctypes are connected both ways. Corrected pipeline (Inquiry
+		// Manager correction, 2026-10-30): the RFQ is built from the
+		// Inquiry directly now, never from a Quotation (there isn't one
+		// yet at this point). Deliberately a plain Link prompt (filtered
+		// server-side to Inquiries assigned to the current user, unless
+		// they're a Commercial Manager/System Manager) + explicit
+		// frm.set_value/clear_table/add_child, not erpnext.utils.
+		// map_current_doc -- that mechanism's MultiSelectDialog + generic
+		// mapper pipeline is built around picking one-or-more *rows* to
+		// pull into an existing table, not cloning one whole source
+		// document's data onto a blank one, and didn't suit this direction
+		// well.
+		if (frm.is_new() && frappe.model.can_read("Inquiry")) {
 			frm.add_custom_button(
-				__("Quotation"),
+				__("Inquiry"),
 				function () {
 					frappe.prompt(
 						[
 							{
-								fieldname: "quotation",
-								label: __("Quotation"),
+								fieldname: "inquiry",
+								label: __("Inquiry"),
 								fieldtype: "Link",
-								options: "Quotation",
+								options: "Inquiry",
 								reqd: 1,
 								get_query: function () {
 									return {
-										query: "smart_app.smart_app.doctype.inquiry.inquiry.get_quotations_for_rfq",
+										filters: { docstatus: 1, commercial_officer: ["is", "set"] },
 									};
 								},
 							},
@@ -1612,7 +1702,7 @@ frappe.ui.form.on("Request for Quotation", {
 						function (values) {
 							frappe.call({
 								method: "smart_app.smart_app.doctype.inquiry.inquiry.get_request_for_quotation_data",
-								args: { quotation_name: values.quotation },
+								args: { inquiry_name: values.inquiry },
 								freeze: true,
 								freeze_message: __("Fetching items and suppliers..."),
 								callback: function (r) {
@@ -1621,7 +1711,6 @@ frappe.ui.form.on("Request for Quotation", {
 
 									frm.set_value("company", data.company);
 									frm.set_value("transaction_date", data.transaction_date);
-									frm.set_value("quotation", data.quotation);
 									frm.set_value("inquiry", data.inquiry);
 									frm.set_value("email_template", data.email_template);
 									frm.set_value("message_for_supplier", data.message_for_supplier);
@@ -1644,7 +1733,7 @@ frappe.ui.form.on("Request for Quotation", {
 								},
 							});
 						},
-						__("Get Items From Quotation"),
+						__("Get Items From Inquiry"),
 						__("Fetch")
 					);
 				},
@@ -1704,8 +1793,72 @@ frappe.ui.form.on("Request for Quotation", {
 
 
 def setup_quotation_integration():
+	if frappe.db.exists("DocType", "Purchase Order"):
+		# Always US$ (force_trade_currency_purchase_order, utils.py) --
+		# same 2026-10-30 correction as Quotation's own currency below.
+		_set_property_setter("Purchase Order", "currency", "read_only", "1", "Check")
+
 	if frappe.db.exists("DocType", "Quotation"):
+		# Always US$ (force_trade_currency_quotation, utils.py) -- 2026-10-30
+		# correction: "Quotation, PO and Indents will be in US$ instead
+		# PKR." Read-only so the form doesn't show an editable field that
+		# gets silently overwritten back to USD on every save.
+		_set_property_setter("Quotation", "currency", "read_only", "1", "Check")
 		_add_custom_field("Quotation", "inquiry", "Inquiry", "Inquiry", insert_after="party_name")
+		# Traces this Quotation back to the Supplier Comparative Statement
+		# it was built from (create_quotation_from_comparative_statement,
+		# supplier_comparative_statement.py) -- the corrected pipeline's own
+		# source now (Inquiry Manager correction, 2026-10-30), replacing the
+		# old Inquiry -> Quotation direct mapping (make_quotation, removed).
+		_add_custom_field(
+			"Quotation",
+			"comparative_statement",
+			"Supplier Comparative Statement",
+			"Supplier Comparative Statement",
+			insert_after="inquiry",
+		)
+		_set_property_setter("Quotation", "comparative_statement", "read_only", "1", "Check")
+
+		# Approval gate before Purchase Order/Indent can be created (see
+		# _require_approved_quotation, supplier_comparative_statement.py) and
+		# before it can be shared with the Marketer (share_quotation_with_
+		# marketer, inquiry.py) -- both only ever set via approve_quotation,
+		# never hand-edited.
+		_add_custom_field(
+			"Quotation",
+			"quotation_approval_status",
+			"Approval Status",
+			"Pending Approval\nApproved",
+			insert_after="comparative_statement",
+			fieldtype="Select",
+		)
+		frappe.db.set_value(
+			"Custom Field", "Quotation-quotation_approval_status", "default", "Pending Approval"
+		)
+		_set_property_setter("Quotation", "quotation_approval_status", "read_only", "1", "Check")
+		_add_custom_field(
+			"Quotation", "approved_by", "Approved By", "User", insert_after="quotation_approval_status"
+		)
+		_set_property_setter("Quotation", "approved_by", "read_only", "1", "Check")
+		_add_custom_field(
+			"Quotation", "approved_on", "Approved On", None, insert_after="approved_by", fieldtype="Datetime"
+		)
+		_set_property_setter("Quotation", "approved_on", "read_only", "1", "Check")
+
+		_add_custom_field(
+			"Quotation",
+			"shared_with_marketer",
+			"Shared with Marketer",
+			None,
+			insert_after="approved_on",
+			fieldtype="Check",
+		)
+		_set_property_setter("Quotation", "shared_with_marketer", "read_only", "1", "Check")
+		_add_custom_field(
+			"Quotation", "shared_on", "Shared On", None, insert_after="shared_with_marketer", fieldtype="Datetime"
+		)
+		_set_property_setter("Quotation", "shared_on", "read_only", "1", "Check")
+
 		_upsert_client_script(
 			"Inquiry - Commercial Pipeline (Quotation)", "Quotation", QUOTATION_CLIENT_SCRIPT_JS
 		)
@@ -2228,6 +2381,29 @@ def setup_commission_income_item():
 	ensure_commission_income_item()
 
 
+def setup_usd_trade_accounts():
+	"""Pre-creates the two shared USD-denominated ledger accounts ("Debtors
+	USD" / "Creditors USD") that force_trade_currency_quotation/
+	force_trade_currency_purchase_order (utils.py) point every Customer's/
+	Supplier's Party Account override at, the first time they're used in
+	this app's now-always-US$ Quotation/Purchase Order workflow (2026-10-30
+	correction: "Quotation, PO and Indents will be in US$ instead PKR").
+
+	Seeded here, once, for every real Company on the site -- same reasoning
+	as setup_commission_income_item just above: ensure_usd_party_account
+	(utils.py) would create one lazily anyway (ensure_usd_trade_account),
+	but seeding it ahead of time, in its own unrelated transaction, avoids
+	the exact same kind of same-transaction visibility problem that caused
+	"Item Commission Income not found" there."""
+	from smart_app.smart_app.utils import ensure_usd_trade_account
+
+	for company in frappe.get_all("Company", pluck="name"):
+		if frappe.db.get_value("Company", company, "default_receivable_account"):
+			ensure_usd_trade_account("Customer", company)
+		if frappe.db.get_value("Company", company, "default_payable_account"):
+			ensure_usd_trade_account("Supplier", company)
+
+
 # ---------------------------------------------------------------------------
 # Print Format
 #
@@ -2311,6 +2487,25 @@ def setup_print_format():
 		margin-right: 9mm;
 	}
 
+	/* get_print_format_styles only extracts rules whose selector text is
+	the exact standalone string ".print-format" (a strict equality check
+	in its own source) -- so this rule, with a more specific selector, is
+	invisible to it and never affects the wkhtmltopdf margin options
+	above. What it DOES do: cancel the same margin/width when it lands on
+	Frappe's own on-screen Print Preview wrapper (`.print-format-gutter >
+	.print-format`), which carries the identical class name and would
+	otherwise visibly inherit this 46mm/38mm/9mm box as real CSS, shoving
+	the whole preview card down and narrowing it -- confirmed live on
+	IND0001-SC-202610 ("different format at print stage"): the actual
+	generated PDF is unaffected either way, since the PDF's own HTML (see
+	get_rendered_template/pdf_body_html) never contains a
+	class="print-format" element in the first place -- only the preview
+	page's chrome does. */
+	div.print-format-gutter > .print-format {
+		margin: auto !important;
+		width: auto !important;
+	}
+
 	.inquiry-print {
 		font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
 		font-size: 8.3px;
@@ -2327,7 +2522,7 @@ def setup_print_format():
 		color: #0f172a;
 		margin: 0 0 6px;
 		padding-bottom: 4px;
-		border-bottom: 1.5px solid #0f6e51;
+		border-bottom: 1.5px solid #00a650;
 	}
 
 	.inquiry-print table {
@@ -2342,14 +2537,14 @@ def setup_print_format():
 	}
 
 	.inquiry-print .section-head {
-		background: #0f6e51;
+		background: #00a650;
 		color: #ffffff;
 		font-size: 7.5px;
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.6px;
 		padding: 2px 4px;
-		border: 1px solid #0f6e51;
+		border: 1px solid #00a650;
 	}
 	.inquiry-print .label-cell {
 		font-weight: 600;
@@ -2379,7 +2574,7 @@ def setup_print_format():
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.3px;
-		color: #0f6e51;
+		color: #00a650;
 		margin-bottom: 2px;
 	}
 </style>
@@ -2514,6 +2709,14 @@ def setup_indent_print_format():
 		margin-right: 9mm;
 	}
 
+	/* See the identical rule/comment in setup_print_format (Inquiry
+	Standard) -- same CSS-selector collision, same fix, same root cause
+	behind IND0001-SC-202610 looking "different" on screen. */
+	div.print-format-gutter > .print-format {
+		margin: auto !important;
+		width: auto !important;
+	}
+
 	.indent-print {
 		font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
 		font-size: 8.3px;
@@ -2530,7 +2733,7 @@ def setup_indent_print_format():
 		color: #0f172a;
 		margin: 0 0 6px;
 		padding-bottom: 4px;
-		border-bottom: 1.5px solid #0f6e51;
+		border-bottom: 1.5px solid #00a650;
 	}
 
 	.indent-print table {
@@ -2546,14 +2749,14 @@ def setup_indent_print_format():
 
 	/* Section header bar -- one per block (Seller/Buyer, Items, Terms, etc). */
 	.indent-print .section-head {
-		background: #0f6e51;
+		background: #00a650;
 		color: #ffffff;
 		font-size: 7.5px;
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.6px;
 		padding: 2px 4px;
-		border: 1px solid #0f6e51;
+		border: 1px solid #00a650;
 	}
 
 	.indent-print .label-cell {
@@ -2580,8 +2783,8 @@ def setup_indent_print_format():
 	.indent-print .items-table td.num, .indent-print .items-table th.num { text-align: right; }
 	.indent-print .items-table .item-desc { color: #64748b; font-size: 7.5px; font-style: italic; }
 	.indent-print .total-row td {
-		border-top: 1.2px solid #0f6e51;
-		background: #f4faf7;
+		border-top: 1.2px solid #00a650;
+		background: #eefaf2;
 		font-weight: 700;
 		font-size: 8.8px;
 	}
@@ -2592,8 +2795,8 @@ def setup_indent_print_format():
 		font-size: 7.3px;
 		text-transform: uppercase;
 		letter-spacing: 0.3px;
-		color: #0f6e51;
-		background: #f4faf7;
+		color: #00a650;
+		background: #eefaf2;
 		width: 13%;
 	}
 	.indent-print .clause-text { font-size: 7.5px; line-height: 1.35; }
@@ -2621,7 +2824,7 @@ def setup_indent_print_format():
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.3px;
-		color: #0f6e51;
+		color: #00a650;
 		margin-bottom: 2px;
 	}
 </style>

@@ -83,6 +83,18 @@ doc_events = {
 		],
 	},
 	"Quotation": {
+		# before_validate, not validate -- AccountsController.validate()
+		# calls validate_currency() itself (confirmed against erpnext's own
+		# source), and Frappe dispatches doc_events["validate"] hooks only
+		# AFTER the controller's own validate() returns (frappe.model.
+		# document.Document.hook's own compose(): `fn(self, ...)` -- the
+		# controller method -- runs first, hooks run after). A "validate"
+		# hook here would always be one step too late to stop
+		# validate_currency() from already having thrown. before_validate
+		# runs as its own, earlier, complete dispatch (run_method calls
+		# "before_validate" fully, then "validate" -- see Document._validate),
+		# so this is the one hook point that actually runs early enough.
+		"before_validate": "smart_app.smart_app.utils.force_trade_currency_quotation",
 		"after_insert": "smart_app.smart_app.utils.update_inquiry_on_quotation_created",
 		"on_submit": "smart_app.smart_app.utils.sync_item_prices_from_quotation",
 	},
@@ -91,6 +103,13 @@ doc_events = {
 	},
 	"Supplier Quotation": {
 		"on_submit": "smart_app.smart_app.utils.sync_item_prices_from_supplier_quotation",
+	},
+	"Purchase Order": {
+		# before_validate -- see the identical reasoning on Quotation above.
+		"before_validate": "smart_app.smart_app.utils.force_trade_currency_purchase_order",
+	},
+	"Supplier Comparative Statement": {
+		"on_submit": "smart_app.smart_app.utils.advance_inquiry_on_comparative_statement_submit",
 	},
 	"Item": {
 		"validate": [

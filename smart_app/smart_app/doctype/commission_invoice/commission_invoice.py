@@ -163,11 +163,26 @@ def ensure_commission_income_item():
 
 
 def _build_commission_invoice_from_indent(indent):
+	"""Currency comes from the billing Customer's own resolved receivable
+	account, never straight from `indent.currency` -- Indent is always US$
+	now (see Indent.validate), but the billing_customer this creates/reuses
+	(ensure_customer_for_supplier, utils.py) is a brand new Customer with no
+	Party Account override, so it stays on Company's own default (PKR)
+	receivable account. Commission Invoice was never part of the "Quotation,
+	PO and Indent in US$" correction (2026-10-30) -- blindly inheriting
+	indent.currency here would make create_and_submit_sales_invoice's own
+	Sales Invoice hit the exact same InvalidCurrency this whole fix was
+	meant to resolve, just one hop further down the chain."""
+	from erpnext.accounts.party import get_party_account_currency
+
 	commission_invoice = frappe.new_doc("Commission Invoice")
 	commission_invoice.company = indent.company
-	commission_invoice.currency = indent.currency
 	commission_invoice.indent = indent.name
 	commission_invoice.billing_customer = ensure_customer_for_supplier(indent.supplier)
+	commission_invoice.currency = (
+		get_party_account_currency("Customer", commission_invoice.billing_customer, indent.company)
+		or indent.currency
+	)
 	return commission_invoice
 
 

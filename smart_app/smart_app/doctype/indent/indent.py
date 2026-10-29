@@ -10,6 +10,7 @@ from frappe.utils import flt
 class Indent(Document):
 	def validate(self):
 		self.calculate_totals()
+		self.force_trade_currency()
 
 	def calculate_totals(self):
 		"""Same shape as every other item-table total in this app -- computed
@@ -23,6 +24,15 @@ class Indent(Document):
 			total_amount += flt(row.amount)
 		self.total_qty = total_qty
 		self.total_amount = total_amount
+
+	def force_trade_currency(self):
+		"""Always US$ -- an explicit correction (2026-10-30): "Quotation, PO
+		and Indents will be in US$ instead PKR." Indent isn't a real
+		accounting doctype (no GL, no party-currency check at all, unlike
+		Quotation/Purchase Order -- see force_trade_currency_quotation/
+		force_trade_currency_purchase_order in utils.py for why those two
+		need a Party Account override too), so this is the whole fix here."""
+		self.currency = "USD"
 
 	def on_submit(self):
 		"""Status is entirely automatic from here on -- no manual "mark as"
@@ -81,6 +91,7 @@ def get_indent_data_from_quotation(quotation_name):
 	the shared builder both this and that use, so they always source
 	identically)."""
 	from smart_app.smart_app.doctype.supplier_comparative_statement.supplier_comparative_statement import (
+		_require_approved_quotation,
 		_require_comparative_statement,
 		_selected_rows_by_supplier,
 		build_indent_doc_for_supplier,
@@ -90,6 +101,7 @@ def get_indent_data_from_quotation(quotation_name):
 	quotation.check_permission("read")
 	if quotation.quotation_to != "Customer":
 		frappe.throw(_("Only a Quotation addressed to a Customer can be used to build an Indent."))
+	_require_approved_quotation(quotation)
 
 	comparative_statement = _require_comparative_statement(quotation_name)
 	grouped = _selected_rows_by_supplier(comparative_statement)

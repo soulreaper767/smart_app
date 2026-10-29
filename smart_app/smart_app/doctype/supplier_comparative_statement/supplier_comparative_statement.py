@@ -90,11 +90,13 @@ def _build_comparative_statement_from_rfq(rfq):
 	for cloning one whole source document's data onto a blank one)."""
 	doc = frappe.new_doc("Supplier Comparative Statement")
 	doc.company = rfq.company
-	doc.currency = (
-		frappe.db.get_value("Quotation", rfq.get("quotation"), "currency")
-		if rfq.get("quotation")
-		else frappe.db.get_single_value("Global Defaults", "default_currency")
-	)
+	# Always US$ now -- the Quotation this statement eventually produces
+	# (create_quotation_from_comparative_statement below) is forced to US$
+	# regardless (force_trade_currency_quotation, utils.py), and under the
+	# corrected pipeline (2026-10-30) the RFQ is built from the Inquiry
+	# directly, so `rfq.quotation` (the OLD reverse-link, from when RFQ was
+	# built from a Quotation) is never set to derive a currency from here.
+	doc.currency = "USD"
 	doc.request_for_quotation = rfq.name
 	doc.inquiry = rfq.get("inquiry")
 
@@ -285,6 +287,22 @@ def _require_comparative_statement(quotation_name):
 	return frappe.get_doc("Supplier Comparative Statement", name)
 
 
+def _require_approved_quotation(quotation):
+	"""Purchase Order/Indent creation now also requires the Quotation itself
+	to be approved first -- the corrected pipeline's own order (Inquiry
+	Manager correction, 2026-10-30): "the Quotation ... will be approved
+	and shared to marketer", which this app reads as the real gate before
+	anything is actually ordered against a winning Supplier, not merely a
+	display label. See approve_quotation (inquiry.py)."""
+	if quotation.get("quotation_approval_status") != "Approved":
+		frappe.throw(
+			_(
+				"This Quotation has not been approved yet. A Commercial Manager must approve it "
+				"before a Purchase Order or Indent can be created."
+			)
+		)
+
+
 def _selected_rows_by_supplier(comparative_statement):
 	grouped = {}
 	for row in comparative_statement.get("items") or []:
@@ -350,6 +368,7 @@ def create_purchase_orders_from_quotation(quotation_name):
 
 	quotation = frappe.get_doc("Quotation", quotation_name)
 	quotation.check_permission("read")
+	_require_approved_quotation(quotation)
 
 	comparative_statement = _require_comparative_statement(quotation_name)
 	grouped = _selected_rows_by_supplier(comparative_statement)
@@ -389,6 +408,7 @@ def create_indents_from_quotation(quotation_name):
 	quotation.check_permission("read")
 	if quotation.quotation_to != "Customer":
 		frappe.throw(_("Only a Quotation addressed to a Customer can be used to build an Indent."))
+	_require_approved_quotation(quotation)
 
 	comparative_statement = _require_comparative_statement(quotation_name)
 	grouped = _selected_rows_by_supplier(comparative_statement)
@@ -402,3 +422,152 @@ def create_indents_from_quotation(quotation_name):
 		created.append(indent.name)
 
 	return created
+
+
+# ---------------------------------------------------------------------------
+# Quotation is now built FROM a submitted Supplier Comparative Statement,
+# never the other way round (Inquiry Manager correction, 2026-10-30):
+# "Inquiry will be assigned 1st and then commercial officer will send the
+# RFQ to the suppliers. After comparison of prices he will prepare the
+# Quotation that will be approved and shared to marketer." Every selected
+# (winning) row across every Supplier goes onto the one Quotation -- it
+# addresses the Buyer, not any particular Supplier, and the rate quoted is
+# the Comparative Statement's own winning rate directly, no markup (same
+# no-markup sourcing Indent/Purchase Order already use -- see
+# build_indent_doc_for_supplier above: this app's only real revenue is the
+# commission on the Indent, never a margin baked into the trade itself).
+# ---------------------------------------------------------------------------
+
+
+def _build_quotation_from_comparative_statement(comparative_statement):
+	if not comparative_statement.inquiry:
+		frappe.throw(
+			_("{0} has no linked Inquiry -- cannot determine the Buyer to quote.").format(
+				comparative_statement.name
+			)
+		)
+
+	selected_rows = [row for row in comparative_statement.get("items") or [] if row.is_selected]
+	if not selected_rows:
+		frappe.throw(_("No winning Supplier selected for any item on {0}.").format(comparative_statement.name))
+
+	inquiry = frappe.get_doc("Inquiry", comparative_statement.inquiry)
+
+	quotation = frappe.new_doc("Quotation")
+	quotation.quotation_to = "Customer"
+	quotation.party_name = inquiry.inquiry_source
+	quotation.company = comparative_statement.company
+	quotation.inquiry = inquiry.name
+	quotation.comparative_statement = comparative_statement.name
+	quotation.quotation_approval_status = "Pending Approval"
+
+	for row in selected_rows:
+		item = frappe.db.get_value(
+			"Item", row.item_code, ["item_name", "description", "stock_uom"], as_dict=True
+		)
+		quotation.append(
+			"items",
+			{
+				"item_code": row.item_code,
+				"item_name": item.item_name if item else row.item_code,
+				"description": item.description if item else None,
+				"uom": item.stock_uom if item else row.uom,
+				"qty": row.qty,
+				"rate": row.rate,
+				"amount": flt(row.qty) * flt(row.rate),
+			},
+		)
+
+	quotation.run_method("set_missing_values")
+	quotation.run_method("calculate_taxes_and_totals")
+	return quotation
+
+
+@frappe.whitelist()
+def create_quotation_from_comparative_statement(comparative_statement_name):
+	"""Builds a brand new, separate draft Quotation from a submitted
+	Supplier Comparative Statement -- the "Create > Quotation" button
+	(install.py's client script for Supplier Comparative Statement). Left
+	as a draft: approve_quotation (inquiry.py) is the separate, explicit
+	next step, same "prepare first, approve second" split as everywhere
+	else in this app."""
+	if not (COMMERCIAL_ROLES & set(frappe.get_roles(frappe.session.user))):
+		frappe.throw(_("You are not allowed to create a Quotation."), frappe.PermissionError)
+	if not frappe.has_permission("Quotation", "create"):
+		frappe.throw(_("You do not have permission to create a Quotation."), frappe.PermissionError)
+
+	comparative_statement = frappe.get_doc("Supplier Comparative Statement", comparative_statement_name)
+	comparative_statement.check_permission("read")
+	if comparative_statement.docstatus != 1:
+		frappe.throw(_("Only a submitted Supplier Comparative Statement can be used to build a Quotation."))
+	if comparative_statement.quotation:
+		frappe.throw(
+			_("A Quotation ({0}) already exists for this Comparative Statement.").format(
+				comparative_statement.quotation
+			)
+		)
+
+	quotation = _build_quotation_from_comparative_statement(comparative_statement)
+	quotation.insert(ignore_permissions=True, ignore_mandatory=True)
+
+	frappe.db.set_value("Supplier Comparative Statement", comparative_statement.name, "quotation", quotation.name)
+
+	return quotation.name
+
+
+@frappe.whitelist()
+def get_quotation_data_from_comparative_statement(comparative_statement_name):
+	"""Used by the "Get Items From > Supplier Comparative Statement" button
+	on a blank Quotation (QUOTATION_CLIENT_SCRIPT_JS, install.py)."""
+	comparative_statement = frappe.get_doc("Supplier Comparative Statement", comparative_statement_name)
+	comparative_statement.check_permission("read")
+	if comparative_statement.docstatus != 1:
+		frappe.throw(_("Only a submitted Supplier Comparative Statement can be used to build a Quotation."))
+
+	quotation = _build_quotation_from_comparative_statement(comparative_statement)
+	return {
+		"quotation_to": quotation.quotation_to,
+		"party_name": quotation.party_name,
+		"company": quotation.company,
+		"inquiry": quotation.inquiry,
+		"comparative_statement": quotation.comparative_statement,
+		"items": [
+			{
+				"item_code": d.item_code,
+				"item_name": d.item_name,
+				"description": d.description,
+				"uom": d.uom,
+				"qty": d.qty,
+				"rate": d.rate,
+				"amount": d.amount,
+			}
+			for d in quotation.items
+		],
+	}
+
+
+@frappe.whitelist()
+def get_comparative_statements_for_quotation(doctype, txt, searchfield, start, page_len, filters):
+	"""Link-field query for the "Get Items From > Supplier Comparative
+	Statement" button on a blank Quotation -- submitted Comparative
+	Statements that don't already have a Quotation built from them yet,
+	scoped the same way this app's other pickers are (own, unless
+	Commercial Manager/System Manager)."""
+	conditions = ["docstatus = 1", "(quotation is null or quotation = '')", "name like %(txt)s"]
+	values = {"txt": f"%{txt}%", "start": start, "page_len": page_len}
+
+	roles = frappe.get_roles(frappe.session.user)
+	if not ({"Commercial Manager", "System Manager"} & set(roles)):
+		conditions.append("owner = %(user)s")
+		values["user"] = frappe.session.user
+
+	return frappe.db.sql(
+		f"""
+		select name
+		from `tabSupplier Comparative Statement`
+		where {" and ".join(conditions)}
+		order by modified desc
+		limit %(page_len)s offset %(start)s
+		""",
+		values,
+	)

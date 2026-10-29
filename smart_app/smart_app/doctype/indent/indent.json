@@ -102,10 +102,12 @@
    "reqd": 1
   },
   {
+   "description": "Always US$ (Indent.force_trade_currency) -- 2026-10-30 correction: \"Quotation, PO and Indents will be in US$ instead PKR.\"",
    "fieldname": "currency",
    "fieldtype": "Link",
    "label": "Currency",
    "options": "Currency",
+   "read_only": 1,
    "reqd": 1
   },
   {
