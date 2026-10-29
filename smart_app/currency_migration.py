@@ -122,3 +122,137 @@ def switch_default_currency(target_currency=DEFAULT_TARGET_CURRENCY):
 
 	print(f"[smart_app] default currency switched to {target_currency}: {changed}")
 	return changed
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-30 correction: Quotation, Purchase Order, and Indent now always
+# transact in US$ going forward (force_trade_currency_quotation /
+# force_trade_currency_purchase_order in utils.py, Indent.force_trade_
+# currency in indent.py) -- but those only ever apply the moment a record
+# is next saved. backfill_trade_currency below is the one-time companion
+# that relabels every EXISTING record of those three doctypes, the same
+# way switch_default_currency above already relabels existing Quotation/
+# Supplier Quotation.
+# ---------------------------------------------------------------------------
+
+
+def backfill_trade_currency(target_currency=DEFAULT_TARGET_CURRENCY):
+	"""Relabels every existing Quotation / Purchase Order / Indent record to
+	`target_currency` (USD by default) -- same relabel-not-conversion
+	approach as switch_default_currency above: every rate/amount number is
+	left exactly as typed, only the currency tag changes (`conversion_rate`
+	/ `plc_conversion_rate` / `base_*` deliberately untouched, for the same
+	reason -- recomputing them without a real exchange rate would be a
+	guess, not a fix).
+
+		bench --site <your-site> execute smart_app.currency_migration.backfill_trade_currency
+		# a different target currency:
+		bench --site <your-site> execute smart_app.currency_migration.backfill_trade_currency --kwargs "{'target_currency': 'EUR'}"
+
+	Unlike switch_default_currency, this DOES now touch Purchase Order --
+	this app creates and owns Purchase Orders (create_purchase_orders_from_
+	quotation, supplier_comparative_statement.py), unlike when that
+	function's own scope note was written. Still deliberately leaves Sales
+	Order, Sales Invoice, Purchase Invoice, Payment Entry, and GL Entry
+	alone, for the identical books-integrity reasoning switch_default_
+	currency's own docstring already gives for those. Commission Invoice is
+	ALSO deliberately left alone here, on top of that -- see
+	_build_commission_invoice_from_indent (commission_invoice.py): its
+	billing Customer is a separate, auto-created stand-in for the Supplier
+	that stays on whatever currency its own resolved account uses, not the
+	Indent's, so there's nothing to relabel there consistent with the
+	going-forward fix.
+
+	Also provisions the USD Party Account override (ensure_usd_party_
+	account, utils.py) for every distinct Customer/Supplier found on an
+	affected Quotation/Purchase Order, *before* the raw SQL relabel below --
+	without this, simply re-opening and re-saving one of these relabeled
+	records later would hit the exact InvalidCurrency error this whole fix
+	was for, the moment its own before_validate hook runs. A party that
+	already has GL history in a different currency can't get this override
+	(ERPNext's own accounting-integrity limit -- see ensure_usd_party_
+	account's own docstring) and is silently left alone here too, exactly
+	as it would be going forward -- its Quotation/Purchase Order still gets
+	relabeled (this is a relabel-only script, not a validation pass), but
+	that one party's records would need a real currency decision from a
+	human, not something this script can safely resolve on its own.
+
+	Idempotent -- every query only ever touches rows that aren't already
+	`target_currency`, so re-running (including with a different target
+	currency later) is always safe."""
+	from smart_app.smart_app.utils import ensure_usd_party_account
+
+	_ensure_currency_enabled(target_currency)
+	changed = {}
+
+	if frappe.db.exists("DocType", "Quotation"):
+		customers = frappe.db.sql(
+			"""
+			select distinct company, party_name
+			from `tabQuotation`
+			where quotation_to = 'Customer' and party_name is not null
+				and (currency is null or currency != %s)
+			""",
+			target_currency,
+		)
+		for company, customer in customers:
+			if company and customer:
+				ensure_usd_party_account("Customer", customer, company)
+
+	if frappe.db.exists("DocType", "Purchase Order"):
+		suppliers = frappe.db.sql(
+			"""
+			select distinct company, supplier
+			from `tabPurchase Order`
+			where supplier is not null and (currency is null or currency != %s)
+			""",
+			target_currency,
+		)
+		for company, supplier in suppliers:
+			if company and supplier:
+				ensure_usd_party_account("Supplier", supplier, company)
+
+	# Quotation / Purchase Order, at every docstatus (draft, submitted,
+	# cancelled) -- raw SQL for the same reason switch_default_currency
+	# uses it above: Frappe blocks editing a field on an already-submitted
+	# document through the normal save path.
+	for doctype in ("Quotation", "Purchase Order"):
+		if not frappe.db.exists("DocType", doctype):
+			continue
+		meta = frappe.get_meta(doctype)
+		set_clauses = []
+		if meta.has_field("currency"):
+			set_clauses.append("currency = %(cur)s")
+		if meta.has_field("price_list_currency"):
+			set_clauses.append("price_list_currency = %(cur)s")
+		if not set_clauses:
+			continue
+
+		table = f"`tab{doctype}`"
+		changed[doctype] = frappe.db.sql(
+			f"select count(*) from {table} where currency is null or currency != %(cur)s",
+			{"cur": target_currency},
+		)[0][0]
+		frappe.db.sql(
+			f"update {table} set {', '.join(set_clauses)} where currency is null or currency != %(cur)s",
+			{"cur": target_currency},
+		)
+
+	# Indent -- smart_app's own doctype, no GL/party-currency check at all
+	# (see Indent.force_trade_currency, indent.py), so a plain relabel with
+	# no Party Account provisioning needed.
+	if frappe.db.exists("DocType", "Indent"):
+		changed["Indent"] = frappe.db.sql(
+			"select count(*) from `tabIndent` where currency is null or currency != %(cur)s",
+			{"cur": target_currency},
+		)[0][0]
+		frappe.db.sql(
+			"update `tabIndent` set currency = %(cur)s where currency is null or currency != %(cur)s",
+			{"cur": target_currency},
+		)
+
+	frappe.db.commit()
+	frappe.clear_cache()
+
+	print(f"[smart_app] trade currency backfilled to {target_currency}: {changed}")
+	return changed

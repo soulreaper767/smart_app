@@ -1560,6 +1560,47 @@ bench --site <your-site> execute smart_app.currency_migration.switch_default_cur
 bench --site <your-site> execute smart_app.currency_migration.switch_default_currency --kwargs "{'target_currency': 'EUR'}"
 ```
 
+### Backfilling existing Quotation / Purchase Order / Indent records to US$
+
+`force_trade_currency_quotation` / `force_trade_currency_purchase_order`
+(`utils.py`) and `Indent.force_trade_currency` (`indent.py`) only apply the
+moment a record is next saved — a Quotation, Purchase Order, or Indent that
+was already created before the 2026-10-30 correction stays on whatever
+currency it already had until someone touches it again. `smart_app.
+currency_migration.backfill_trade_currency` is the one-time companion that
+relabels every **existing** record of those three doctypes in one pass —
+same relabel-not-conversion approach as `switch_default_currency` above
+(numbers untouched, only the currency tag changes), now also covering
+Purchase Order (excluded from `switch_default_currency` only because, when
+that function was first written, this app didn't yet create Purchase
+Orders itself).
+
+Before the raw SQL relabel, it also provisions the USD Party Account
+override (`ensure_usd_party_account`) for every distinct Customer/Supplier
+found on an affected Quotation/Purchase Order — without this, simply
+re-opening and re-saving one of these relabeled records later would hit
+the exact `InvalidCurrency` error the whole fix was for. A party that
+already has GL history in a different currency can't get that override
+(ERPNext's own accounting-integrity limit) and is left alone exactly as it
+would be going forward — its documents still get relabeled here, but that
+one party's records need a real currency decision from a human, not
+something a script should resolve on its own.
+
+Deliberately still leaves Sales Order, Sales Invoice, Purchase Invoice,
+Payment Entry, and GL Entry alone (same books-integrity reasoning as
+`switch_default_currency`), and leaves **Commission Invoice** alone too —
+its billing Customer is a separate stand-in for the Supplier
+(`ensure_customer_for_supplier`) that stays on its own resolved account
+currency, never the Indent's, so there's nothing to relabel there.
+
+Also idempotent, and takes the same `target_currency` kwarg:
+
+```bash
+bench --site <your-site> execute smart_app.currency_migration.backfill_trade_currency
+# a different target currency:
+bench --site <your-site> execute smart_app.currency_migration.backfill_trade_currency --kwargs "{'target_currency': 'EUR'}"
+```
+
 ## Supplier database import
 
 The firm's existing supplier list (`data/Supplier_Import_2026.csv`, 345
