@@ -2489,19 +2489,37 @@ def setup_print_format():
 
 	/* get_print_format_styles only extracts rules whose selector text is
 	the exact standalone string ".print-format" (a strict equality check
-	in its own source) -- so this rule, with a more specific selector, is
+	in its own source) -- so a rule with a MORE SPECIFIC selector is
 	invisible to it and never affects the wkhtmltopdf margin options
-	above. What it DOES do: cancel the same margin/width when it lands on
-	Frappe's own on-screen Print Preview wrapper (`.print-format-gutter >
-	.print-format`), which carries the identical class name and would
-	otherwise visibly inherit this 46mm/38mm/9mm box as real CSS, shoving
-	the whole preview card down and narrowing it -- confirmed live on
-	IND0001-SC-202610 ("different format at print stage"): the actual
-	generated PDF is unaffected either way, since the PDF's own HTML (see
-	get_rendered_template/pdf_body_html) never contains a
-	class="print-format" element in the first place -- only the preview
-	page's chrome does. */
-	div.print-format-gutter > .print-format {
+	above, while still being real CSS that applies wherever its own
+	selector matches. Two different real elements elsewhere in Frappe's
+	own templates carry this exact class, and both need the override:
+
+	1) `.print-format-gutter > .print-format` -- Frappe's own on-screen
+	   Print Preview wrapper (www/printview.html) -- would otherwise
+	   visibly inherit this 46mm/38mm/9mm box as real CSS, shoving the
+	   whole preview card down and narrowing it. Confirmed live on
+	   IND0001-SC-202610 ("different format at print stage").
+
+	2) `body > .print-format` -- confirmed by actually rendering this
+	   print format's extracted header/footer through the real
+	   wkhtmltopdf 0.12.6 binary (not assumed): frappe.utils.pdf.
+	   prepare_header_footer renders the letterhead header/footer
+	   through Frappe's own templates/print_formats/pdf_header_footer.html,
+	   which wraps the letterhead content in its OWN
+	   `<div class="print-format"><div class="wrapper">...` -- and copies
+	   every <style> tag from this print format (this one included) into
+	   that same header/footer document's <head>. Without this override,
+	   the letterhead image was being pushed ~46mm further down inside
+	   its own already-46mm-tall reserved header band -- effectively
+	   pushed out of the visible area entirely. This is the bug the
+	   gutter-only fix above (and the original "the PDF itself is
+	   unaffected" assumption) missed: the PDF's own MAIN BODY content
+	   never has a class="print-format" element (confirmed, see
+	   get_rendered_template/pdf_body_html), but the header/footer PDF
+	   wkhtmltopdf renders separately very much does. */
+	div.print-format-gutter > .print-format,
+	body > .print-format {
 		margin: auto !important;
 		width: auto !important;
 	}
@@ -2533,14 +2551,29 @@ def setup_print_format():
 		border-collapse: collapse;
 		table-layout: fixed;
 		width: 100%;
-		margin-bottom: 3px;
+		margin-bottom: 2px;
 		border: 1px solid #c7cfd6;
 	}
+	/* Both properties, confirmed necessary by an actual wkhtmltopdf
+	render, not assumed: a long unbroken string with no spaces at all
+	(an email address in the Commercial Officer cell) overflowed its
+	fixed-width column and visually overlapped the next cell's text --
+	`overflow-wrap: break-word` alone didn't stop it in wkhtmltopdf's own
+	(2014-era) WebKit. `word-break: break-all` does stop it, but breaks
+	ANY word anywhere, including ones that already fit on their own line
+	-- confirmed that regressed real content (HS codes, "Pakistan",
+	"via") into unnecessary mid-word breaks. `word-break: break-word`
+	(the older, non-standard-but-widely-supported value -- not the same
+	thing as the `overflow-wrap` property above, despite the identical
+	value name) gives the same overflow protection while still
+	preferring a normal space/word boundary first, same as a real render
+	confirmed. */
 	.inquiry-print th, .inquiry-print td {
 		border: 1px solid #e2e8f0;
-		padding: 2px 4px;
+		padding: 1.5px 4px;
 		vertical-align: top;
 		overflow-wrap: break-word;
+		word-break: break-word;
 	}
 
 	.inquiry-print .section-head {
@@ -2736,9 +2769,13 @@ def setup_indent_print_format():
 	}
 
 	/* See the identical rule/comment in setup_print_format (Inquiry
-	Standard) -- same CSS-selector collision, same fix, same root cause
-	behind IND0001-SC-202610 looking "different" on screen. */
-	div.print-format-gutter > .print-format {
+	Standard) -- same two CSS-selector collisions (on-screen Print
+	Preview AND the letterhead header/footer's own wkhtmltopdf render,
+	confirmed by actually rendering this through the real wkhtmltopdf
+	binary), same fix, same root cause behind IND0001-SC-202610 looking
+	"different" both on screen and in the generated PDF. */
+	div.print-format-gutter > .print-format,
+	body > .print-format {
 		margin: auto !important;
 		width: auto !important;
 	}
@@ -2775,14 +2812,18 @@ def setup_indent_print_format():
 		border-collapse: collapse;
 		table-layout: fixed;
 		width: 100%;
-		margin-bottom: 3px;
+		margin-bottom: 2px;
 		border: 1px solid #c7cfd6;
 	}
+	/* See the identical rule/comment in setup_print_format (Inquiry
+	Standard) for why both properties are here, and why word-break is
+	`break-word`, not the more aggressive `break-all`. */
 	.indent-print th, .indent-print td {
 		border: 1px solid #e2e8f0;
-		padding: 2px 4px;
+		padding: 1.5px 4px;
 		vertical-align: top;
 		overflow-wrap: break-word;
+		word-break: break-word;
 	}
 
 	/* Section header bar -- one per block (Seller/Buyer, Items, Terms,
@@ -2852,7 +2893,7 @@ def setup_indent_print_format():
 	.indent-print .signature-table { border-top: 1.5px solid #0f172a; }
 	.indent-print .signature-row td {
 		border: none;
-		padding-top: 12px;
+		padding-top: 8px;
 	}
 	.indent-print .signature-row .signature-line {
 		border-top: 1px solid #0f172a;
@@ -2921,8 +2962,15 @@ replace. -->
 </table>
 
 <table class="items-table">
+	<!-- HS Code widened 9%->12% -- confirmed by an actual wkhtmltopdf render
+	that an 8-digit code ("29242990") was wrapping onto 2 lines at 9%, not
+	because it didn't fit but because word-break: break-word (added for
+	the Commercial Officer email-overflow fix below) makes the renderer
+	measurably more willing to break a borderline-tight cell than its
+	default line-breaking did. Taken from Description, which had more
+	than it needed. -->
 	<colgroup>
-		<col style="width: 44%;"><col style="width: 9%;"><col style="width: 12%;">
+		<col style="width: 41%;"><col style="width: 12%;"><col style="width: 12%;">
 		<col style="width: 16%;"><col style="width: 19%;">
 	</colgroup>
 	<tr>
@@ -2958,13 +3006,17 @@ holds across all 4 rows -- not a flat percentage: position 1
 ("Port of Loading"/"Destination", 15/11 chars) and position 2
 ("Trans-Shipment"/"Partial Shipment", 14/16 chars) need real room, while
 position 3 ("Lead Time"/"GMP"/"FTA"/"WS", 9/3/3/2 chars) never needs more
-than a third of that -- freeing the extra width to its own value column
-instead (Value 3 holds e.g. GMP/FTA/WS availability text). -->
+than a third of that. Value 2 (22%) is the widest value column --
+confirmed by an actual wkhtmltopdf render that Packing values ("25kg HDPE
+Drums, shrink wrapped") were wrapping onto 3 lines at the originally
+narrower 18% and costing real page height; Value 3 (GMP/FTA/WS
+availability, always a short word) gave that width up without losing
+anything. -->
 <table>
 	<colgroup>
 		<col style="width: 14%;"><col style="width: 19%;">
-		<col style="width: 15%;"><col style="width: 18%;">
-		<col style="width: 10%;"><col style="width: 24%;">
+		<col style="width: 14%;"><col style="width: 22%;">
+		<col style="width: 9%;"><col style="width: 22%;">
 	</colgroup>
 	<tr><td class="section-head" colspan="6">Terms &amp; Conditions</td></tr>
 	<tr>
