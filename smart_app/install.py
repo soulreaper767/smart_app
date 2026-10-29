@@ -2525,15 +2525,22 @@ def setup_print_format():
 		border-bottom: 1.5px solid #00a650;
 	}
 
+	/* table-layout: fixed + explicit, content-driven widths below -- same
+	reasoning as Indent Standard: "auto" layout with no widths at all left
+	every label column the same width regardless of holding "Status" (6
+	chars) or "Commercial Officer" (18 chars). */
 	.inquiry-print table {
 		border-collapse: collapse;
+		table-layout: fixed;
 		width: 100%;
-		margin-bottom: 4px;
+		margin-bottom: 3px;
+		border: 1px solid #c7cfd6;
 	}
 	.inquiry-print th, .inquiry-print td {
-		border: 1px solid #d4dae2;
+		border: 1px solid #e2e8f0;
 		padding: 2px 4px;
 		vertical-align: top;
+		overflow-wrap: break-word;
 	}
 
 	.inquiry-print .section-head {
@@ -2543,12 +2550,12 @@ def setup_print_format():
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.6px;
-		padding: 2px 4px;
+		padding: 2.5px 4px;
 		border: 1px solid #00a650;
+		border-bottom: 1.5px solid #00804a;
 	}
 	.inquiry-print .label-cell {
 		font-weight: 600;
-		width: 20%;
 		background: #f8fafb;
 		color: #55606e;
 		font-size: 7px;
@@ -2557,15 +2564,20 @@ def setup_print_format():
 	}
 
 	.inquiry-print .items-table th {
-		background: #f8fafb;
-		color: #55606e;
+		background: #eefaf2;
+		color: #0f172a;
 		font-size: 7px;
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.3px;
 		text-align: left;
+		border-bottom: 1.3px solid #00a650;
 	}
 	.inquiry-print .items-table td.num, .inquiry-print .items-table th.num { text-align: right; }
+	/* Zebra striping -- assigned explicitly per row (row-alt, see the
+	Jinja loop below), not a `tr:nth-child` rule, since the section-head
+	and column-header rows share the table and would throw off the count. */
+	.inquiry-print .items-table .row-alt { background: #fafbfc; }
 
 	.inquiry-print .notes { font-size: 7.5px; color: #334155; }
 	.inquiry-print .notes .heading {
@@ -2583,7 +2595,20 @@ def setup_print_format():
 		+ r"""
 <div class="doc-title">Inquiry</div>
 
+<!-- Explicit <colgroup> on every table below, not width hints on a row's
+own cells -- under table-layout: fixed (above), per-column widths are
+only ever unambiguous when taken from real <col> elements; the Items
+table's first row below is a colspan="3" section-head, which gives a
+fixed-layout table nothing usable to size individual columns from on its
+own. Position 1 here ("Commercial Officer", 18 chars, the widest label
+that ever lands in this column across all 4 rows) needs real room;
+positions 2/3 never hold more than "Mode of Payment" (15 chars). -->
 <table>
+	<colgroup>
+		<col style="width: 15%;"><col style="width: 19%;">
+		<col style="width: 13%;"><col style="width: 17%;">
+		<col style="width: 13%;"><col style="width: 23%;">
+	</colgroup>
 	<tr>
 		<td class="label-cell">Inquiry No</td><td><b>{{ doc.name }}</b></td>
 		<td class="label-cell">Date</td><td>{{ frappe.utils.formatdate(doc.inquiry_date) }}</td>
@@ -2608,14 +2633,15 @@ def setup_print_format():
 </table>
 
 <table class="items-table">
+	<colgroup><col style="width: 10%;"><col style="width: 65%;"><col style="width: 25%;"></colgroup>
 	<tr><td class="section-head" colspan="3">Items</td></tr>
 	<tr>
-		<th style="width: 10%">#</th>
+		<th>#</th>
 		<th>Item</th>
-		<th class="num" style="width: 20%">Quantity</th>
+		<th class="num">Quantity</th>
 	</tr>
 	{% for row in doc.items %}
-	<tr>
+	<tr{% if loop.index is even %} class="row-alt"{% endif %}>
 		<td>{{ row.idx }}</td>
 		<td>{{ row.item_name or row.item }}</td>
 		<td class="num">{{ row.qty }}</td>
@@ -2736,18 +2762,31 @@ def setup_indent_print_format():
 		border-bottom: 1.5px solid #00a650;
 	}
 
+	/* table-layout: fixed -- every column width below is an explicit,
+	content-driven percentage (sized to what that specific label/value
+	actually holds, not a flat number copy-pasted everywhere), and fixed
+	layout is what makes the browser/wkhtmltopdf actually honour those
+	widths consistently row to row instead of silently re-flowing them
+	around whatever happens to be the widest cell in "auto" layout -- the
+	previous version left layout on "auto" with no widths at all on the
+	Terms & Conditions grid, so every one of its 3 label columns rendered
+	at the same width regardless of holding "WS" or "Port of Loading". */
 	.indent-print table {
 		border-collapse: collapse;
+		table-layout: fixed;
 		width: 100%;
-		margin-bottom: 4px;
+		margin-bottom: 3px;
+		border: 1px solid #c7cfd6;
 	}
 	.indent-print th, .indent-print td {
-		border: 1px solid #d4dae2;
+		border: 1px solid #e2e8f0;
 		padding: 2px 4px;
 		vertical-align: top;
+		overflow-wrap: break-word;
 	}
 
-	/* Section header bar -- one per block (Seller/Buyer, Items, Terms, etc). */
+	/* Section header bar -- one per block (Seller/Buyer, Items, Terms,
+	etc), the document's own "running head" for that block. */
 	.indent-print .section-head {
 		background: #00a650;
 		color: #ffffff;
@@ -2755,13 +2794,13 @@ def setup_indent_print_format():
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.6px;
-		padding: 2px 4px;
+		padding: 2.5px 4px;
 		border: 1px solid #00a650;
+		border-bottom: 1.5px solid #00804a;
 	}
 
 	.indent-print .label-cell {
 		font-weight: 600;
-		width: 22%;
 		background: #f8fafb;
 		color: #55606e;
 		font-size: 7px;
@@ -2772,18 +2811,25 @@ def setup_indent_print_format():
 	.indent-print .party-address { color: #475569; }
 
 	.indent-print .items-table th {
-		background: #f8fafb;
-		color: #55606e;
+		background: #eefaf2;
+		color: #0f172a;
 		font-size: 7px;
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.3px;
 		text-align: left;
+		border-bottom: 1.3px solid #00a650;
 	}
 	.indent-print .items-table td.num, .indent-print .items-table th.num { text-align: right; }
 	.indent-print .items-table .item-desc { color: #64748b; font-size: 7.5px; font-style: italic; }
+	/* Zebra striping -- assigned explicitly per row (row-alt, see the
+	Jinja loop below) rather than a `tr:nth-child` CSS rule, since the
+	section-head and column-header rows share the same table and would
+	throw off even/odd counting. */
+	.indent-print .items-table .row-alt { background: #fafbfc; }
 	.indent-print .total-row td {
-		border-top: 1.2px solid #00a650;
+		border-top: 1.5px solid #00a650;
+		border-bottom: 1.5px solid #00a650;
 		background: #eefaf2;
 		font-weight: 700;
 		font-size: 8.8px;
@@ -2797,15 +2843,16 @@ def setup_indent_print_format():
 		letter-spacing: 0.3px;
 		color: #00a650;
 		background: #eefaf2;
-		width: 13%;
 	}
-	.indent-print .clause-text { font-size: 7.5px; line-height: 1.35; }
+	.indent-print .clause-text { font-size: 7.5px; line-height: 1.3; }
 	.indent-print .clause-text + .clause-text { margin-top: 2px; }
 	.indent-print .shipping-marks { text-align: center; }
+	.indent-print .shipping-marks .spacer { display: block; height: 3px; }
 
+	.indent-print .signature-table { border-top: 1.5px solid #0f172a; }
 	.indent-print .signature-row td {
 		border: none;
-		padding-top: 14px;
+		padding-top: 12px;
 	}
 	.indent-print .signature-row .signature-line {
 		border-top: 1px solid #0f172a;
@@ -2833,18 +2880,32 @@ def setup_indent_print_format():
 		+ r"""
 <div class="doc-title">Indent</div>
 
+<!-- Every table below gets an explicit <colgroup> rather than width hints
+on a row's own cells -- under table-layout: fixed (above), per-column
+widths are only ever unambiguous when taken from real <col> elements; a
+row whose only cell is a colspan="N" section-head (Items, Terms & Conditions,
+Bank Details below) gives a fixed-layout table nothing usable to size
+individual columns from, so leaving it to "whichever later row happens to
+specify widths" is exactly the kind of guesswork this was meant to
+replace. -->
+
 <table>
+	<colgroup>
+		<col style="width: 14%;"><col style="width: 36%;">
+		<col style="width: 14%;"><col style="width: 36%;">
+	</colgroup>
 	<tr>
-		<td class="label-cell" style="width: 16%;">Indent No</td>
+		<td class="label-cell">Indent No</td>
 		<td><b>{{ doc.name }}</b></td>
-		<td class="label-cell" style="width: 12%;">Date</td>
+		<td class="label-cell">Date</td>
 		<td>{{ frappe.utils.formatdate(doc.indent_date) }}</td>
 	</tr>
 </table>
 
 <table>
+	<colgroup><col style="width: 50%;"><col style="width: 50%;"></colgroup>
 	<tr>
-		<td class="section-head" style="width: 50%;">Seller</td>
+		<td class="section-head">Seller</td>
 		<td class="section-head">Buyer</td>
 	</tr>
 	<tr>
@@ -2860,18 +2921,22 @@ def setup_indent_print_format():
 </table>
 
 <table class="items-table">
+	<colgroup>
+		<col style="width: 44%;"><col style="width: 9%;"><col style="width: 12%;">
+		<col style="width: 16%;"><col style="width: 19%;">
+	</colgroup>
 	<tr>
 		<td class="section-head" colspan="5">Items</td>
 	</tr>
 	<tr>
 		<th>Product Description</th>
-		<th style="width: 11%">HS Code</th>
-		<th class="num" style="width: 13%">Quantity</th>
-		<th class="num" style="width: 15%">Unit Price ({{ doc.currency }})</th>
-		<th class="num" style="width: 16%">Total Value ({{ doc.currency }})</th>
+		<th>HS Code</th>
+		<th class="num">Quantity</th>
+		<th class="num">Unit Price ({{ doc.currency }})</th>
+		<th class="num">Total Value ({{ doc.currency }})</th>
 	</tr>
 	{% for row in doc.items %}
-	<tr>
+	<tr{% if loop.index is even %} class="row-alt"{% endif %}>
 		<td>
 			{{ row.item_name or row.item_code }}
 			{% if row.description %}<div class="item-desc">{{ row.description }}</div>{% endif %}
@@ -2888,7 +2953,19 @@ def setup_indent_print_format():
 	</tr>
 </table>
 
+<!-- Column widths below are sized per position to what it actually ever
+holds across all 4 rows -- not a flat percentage: position 1
+("Port of Loading"/"Destination", 15/11 chars) and position 2
+("Trans-Shipment"/"Partial Shipment", 14/16 chars) need real room, while
+position 3 ("Lead Time"/"GMP"/"FTA"/"WS", 9/3/3/2 chars) never needs more
+than a third of that -- freeing the extra width to its own value column
+instead (Value 3 holds e.g. GMP/FTA/WS availability text). -->
 <table>
+	<colgroup>
+		<col style="width: 14%;"><col style="width: 19%;">
+		<col style="width: 15%;"><col style="width: 18%;">
+		<col style="width: 10%;"><col style="width: 24%;">
+	</colgroup>
 	<tr><td class="section-head" colspan="6">Terms &amp; Conditions</td></tr>
 	<tr>
 		<td class="label-cell">Payment Terms</td><td>{{ doc.payment_terms or "" }}</td>
@@ -2913,6 +2990,7 @@ def setup_indent_print_format():
 </table>
 
 <table>
+	<colgroup><col style="width: 20%;"><col style="width: 80%;"></colgroup>
 	<tr><td class="section-head" colspan="2">Bank Details</td></tr>
 	<tr><td class="label-cell">Beneficiary Name</td><td>{{ doc.bank_beneficiary_name or "" }}</td></tr>
 	<tr><td class="label-cell">Bank Name</td><td>{{ doc.bank_name or "" }}</td></tr>
@@ -2922,6 +3000,7 @@ def setup_indent_print_format():
 </table>
 
 <table>
+	<colgroup><col style="width: 10%;"><col style="width: 90%;"></colgroup>
 	<tr>
 		<td class="clause-label">For<br>Banker</td>
 		<td class="clause-text">
@@ -2958,7 +3037,8 @@ def setup_indent_print_format():
 		<td class="clause-label">Shipping<br>Marks</td>
 		<td class="clause-text shipping-marks">
 			<b>Beneficiary Name &amp; Origin</b><br>
-			{{ doc.customer_name or "" }} / {{ doc.company }} / Lahore<br><br>
+			{{ doc.customer_name or "" }} / {{ doc.company }} / Lahore
+			<span class="spacer"></span>
 			<b>Material Name</b> &mdash; Net &amp; Gross Weight, Quantity, Batch No, Mfg Date &amp; Expiry Date
 		</td>
 	</tr>
@@ -2971,9 +3051,10 @@ def setup_indent_print_format():
 </div>
 {% endif %}
 
-<table>
+<table class="signature-table">
+	<colgroup><col style="width: 50%;"><col style="width: 50%;"></colgroup>
 	<tr class="signature-row">
-		<td style="width: 50%;"><div class="signature-line">Indentor Seal &amp; Signature</div></td>
+		<td><div class="signature-line">Indentor Seal &amp; Signature</div></td>
 		<td><div class="signature-line">Buyer's Seal &amp; Signature</div></td>
 	</tr>
 </table>
