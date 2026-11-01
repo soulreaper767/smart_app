@@ -565,6 +565,26 @@ before anything reaches a supplier — most usefully, delete any supplier row
 they don't actually want this RFQ to go to (plain grid-row delete, already
 available on any draft Request for Quotation they have write access to).
 
+**Fixing a missing Item → Supplier link without leaving the RFQ.**
+Corrected 2026-11-01 — building an RFQ used to `frappe.throw` outright the
+moment not one single item on it had a Supplier on file yet, which meant a
+large Inquiry with several genuinely-new items couldn't get an RFQ built
+at all until every one of them was fixed up individually, on the Item
+form, first. The Items grid now has its own **Supplier** column (Custom
+Field on Request for Quotation Item), pre-filled best-effort from the
+Item's own preferred/first Supplier when it already has one
+(`_best_effort_item_supplier`) and left blank otherwise. Picking a value
+there — an ordinary Link field, so it offers every existing Supplier to
+search, and "Create a new Supplier" inline if the right one isn't on file
+yet either — calls `attach_supplier_to_item` (`inquiry.py`), which writes
+that Supplier back onto the Item's own Supplier Items table (so every
+future RFQ/Inquiry involving it already has it) **and** adds it to this
+RFQ's own Suppliers table immediately, client-side, with no save/reload
+round-trip. An RFQ can now be created and worked on with some or all
+items still missing a Supplier — the "Submit & Send to Suppliers" button
+(below) simply doesn't appear until the Suppliers table actually has a
+row in it, which is gate enough on its own.
+
 **Sending the RFQ.** `setup_quotation_integration` adds a Client Script on
 Request for Quotation: a **"Submit & Send to Suppliers"** button (visible
 on any draft that has at least one supplier row), which — after a one-line

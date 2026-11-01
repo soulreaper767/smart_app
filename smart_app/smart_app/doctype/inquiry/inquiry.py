@@ -399,6 +399,19 @@ def assign_commercial_officer(inquiry_name, commercial_officer=None):
 	return doc.commercial_officer
 
 
+def _best_effort_item_supplier(item_code):
+	"""The item's own preferred Supplier (enforce_single_preferred_supplier,
+	utils.py, keeps this to at most one), falling back to whichever
+	Supplier happens to be first on file -- used only to pre-fill the
+	RFQ Items grid's own `supplier` column (see _append_rfq_item below),
+	never to decide anything on its own; blank (no Supplier on file yet)
+	is exactly the case that column exists to let a Commercial Officer
+	fix directly on the RFQ, without a separate trip to the Item form."""
+	return frappe.db.get_value(
+		"Item Supplier", {"parent": item_code, "is_preferred_supplier": 1}, "supplier"
+	) or frappe.db.get_value("Item Supplier", {"parent": item_code}, "supplier")
+
+
 def _append_rfq_item(rfq, item_code, qty):
 	"""Shared by both create_request_for_quotation and
 	get_request_for_quotation_data below: append one (item_code, qty) pair
@@ -412,7 +425,17 @@ def _append_rfq_item(rfq, item_code, qty):
 	validate_for_items unconditionally). Every Item quick-created from this
 	app's own Item Link fields defaults "Maintain Stock" on (see
 	ensure_item_default_warehouse in utils.py), so a row built without a
-	warehouse here would fail that check immediately on insert."""
+	warehouse here would fail that check immediately on insert.
+
+	`supplier` (Custom Field, setup_quotation_integration) is pre-filled
+	best-effort from the Item's own master data, and left blank when it
+	has none on file -- a Commercial Officer fills the gap directly on
+	this row (RFQ_CLIENT_SCRIPT_JS's own grid handler, attach_supplier_to_
+	item below), instead of having to go fix every Item one at a time
+	before an RFQ can even be built at all (2026-11-01 correction: this
+	function used to hard-block RFQ creation entirely the moment not one
+	single item had a Supplier on file yet -- see
+	_populate_rfq_suppliers_and_template's own docstring)."""
 	item = frappe.db.get_value("Item", item_code, ["stock_uom", "is_stock_item"], as_dict=True)
 	if not item:
 		return
@@ -433,6 +456,7 @@ def _append_rfq_item(rfq, item_code, qty):
 			"stock_uom": item.stock_uom,
 			"conversion_factor": 1,
 			"warehouse": warehouse,
+			"supplier": _best_effort_item_supplier(item_code),
 		},
 	)
 
@@ -445,10 +469,22 @@ def _populate_rfq_suppliers_and_template(rfq):
 	(Item.supplier_items — an item commonly has several, trader and
 	manufacturer alike, and all of them are pulled in so the RFQ can go out
 	to multiple suppliers at once) and wire in the corporate email
-	template. Throws if not one single item has a supplier on file at all —
-	an RFQ with nobody to send it to isn't useful, and this way the
-	deliberately-missing "who to send this to" problem surfaces up front
-	rather than as a silently supplier-less draft."""
+	template.
+
+	2026-11-01 correction: this used to `frappe.throw` outright the moment
+	not one single item had a Supplier on file yet -- with a large Inquiry
+	(many items, several of them genuinely new to the system), that meant
+	the RFQ itself could never even be created until every one of those
+	Items was fixed up individually first, one at a time, on the Item
+	form. No longer blocks: a draft RFQ with an empty Suppliers table is
+	left as-is (the "Submit & Send to Suppliers" button, RFQ_CLIENT_
+	SCRIPT_JS, already only shows once `suppliers` actually has a row, so
+	there's nothing to accidentally send to nobody) -- the RFQ Items
+	grid's own `supplier` column is the fix now: picking one there (for a
+	row that was blank) both fills in the Item's own missing master data
+	and adds that Supplier to this table immediately (attach_supplier_to_
+	item below, called from the grid's own field-change handler), without
+	ever leaving this form."""
 	suppliers_seen = {row.supplier for row in rfq.get("suppliers") or []}
 
 	for row in rfq.get("items") or []:
@@ -472,20 +508,49 @@ def _populate_rfq_suppliers_and_template(rfq):
 				},
 			)
 
-	if not suppliers_seen:
-		frappe.throw(
-			_(
-				"None of the items in this Quotation have a linked Supplier yet. "
-				"Add suppliers under the Item's own \"Supplier Items\" table first."
-			)
-		)
-
 	from smart_app.install import RFQ_EMAIL_TEMPLATE_NAME
 
 	if frappe.db.exists("Email Template", RFQ_EMAIL_TEMPLATE_NAME):
 		rfq.email_template = RFQ_EMAIL_TEMPLATE_NAME
 		if hasattr(rfq, "set_data_for_supplier"):
 			rfq.set_data_for_supplier()
+
+
+RFQ_SUPPLIER_FIX_ROLES = {"Commercial Manager", "Commercial Officer", "System Manager"}
+
+
+@frappe.whitelist()
+def attach_supplier_to_item(item_code, supplier):
+	"""The server side of the RFQ Items grid's own `supplier` column
+	(Custom Field, setup_quotation_integration; grid field-change handler,
+	RFQ_CLIENT_SCRIPT_JS) -- picking a Supplier directly on an RFQ row,
+	for an Item that doesn't have one on file yet, writes it back to that
+	Item's own Supplier Items table too, so every future RFQ/Inquiry
+	involving it already has it, instead of requiring a separate trip to
+	the Item form first (2026-11-01 correction, see _populate_rfq_
+	suppliers_and_template's own docstring for the full reasoning).
+	Idempotent -- a Supplier already on file for this Item is left
+	untouched. Returns the Supplier's own default contact/email so the
+	client can add it to the RFQ's own Suppliers table immediately,
+	without a round-trip reload."""
+	if not (RFQ_SUPPLIER_FIX_ROLES & set(frappe.get_roles(frappe.session.user))):
+		frappe.throw(_("You are not allowed to update Item suppliers."), frappe.PermissionError)
+	if not (item_code and supplier):
+		frappe.throw(_("Item and Supplier are both required."))
+	if not frappe.db.exists("Item", item_code):
+		frappe.throw(_("Item {0} does not exist.").format(item_code))
+	if not frappe.db.exists("Supplier", supplier):
+		frappe.throw(_("Supplier {0} does not exist.").format(supplier))
+
+	already_linked = bool(frappe.db.exists("Item Supplier", {"parent": item_code, "supplier": supplier}))
+	if not already_linked:
+		item = frappe.get_doc("Item", item_code)
+		item.append("supplier_items", {"supplier": supplier})
+		item.save(ignore_permissions=True)
+
+	contact_name = get_default_contact("Supplier", supplier)
+	email = frappe.db.get_value("Contact", contact_name, "email_id") if contact_name else None
+	return {"contact": contact_name, "email_id": email, "added_to_item": not already_linked}
 
 
 def _require_inquiry_for_rfq(inquiry_name):
@@ -621,6 +686,7 @@ def get_request_for_quotation_data(inquiry_name):
 				"stock_uom": d.stock_uom,
 				"conversion_factor": d.conversion_factor,
 				"warehouse": d.warehouse,
+				"supplier": d.supplier,
 			}
 			for d in rfq.items
 		],

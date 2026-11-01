@@ -1790,6 +1790,51 @@ frappe.ui.form.on("Request for Quotation", {
 		}
 	},
 });
+
+// Grid-row handler for the Items table's own `supplier` column (Custom
+// Field, setup_quotation_integration) -- picking/changing a Supplier
+// directly on a row, for an Item that doesn't have one on file yet,
+// writes it back onto that Item's own Supplier Items table AND adds it
+// to this RFQ's own Suppliers table in one action, so a large Inquiry
+// with many never-before-sourced items doesn't need a separate trip to
+// every Item form first (2026-11-01 correction).
+frappe.ui.form.on("Request for Quotation Item", {
+	supplier: function (frm, cdt, cdn) {
+		const row = locals[cdt][cdn];
+		if (!row.supplier || !row.item_code) return;
+
+		frappe.call({
+			method: "smart_app.smart_app.doctype.inquiry.inquiry.attach_supplier_to_item",
+			args: { item_code: row.item_code, supplier: row.supplier },
+			freeze: true,
+			freeze_message: __("Linking Supplier..."),
+			callback: function (r) {
+				if (!r.message) return;
+
+				const already_on_rfq = (frm.doc.suppliers || []).some(function (s) {
+					return s.supplier === row.supplier;
+				});
+				if (!already_on_rfq) {
+					frm.add_child("suppliers", {
+						supplier: row.supplier,
+						contact: r.message.contact,
+						email_id: r.message.email_id,
+						send_email: r.message.email_id ? 1 : 0,
+					});
+					frm.refresh_field("suppliers");
+					frm.dirty();
+				}
+
+				if (r.message.added_to_item) {
+					frappe.show_alert({
+						message: __("Added {0} as a Supplier for Item {1} too.", [row.supplier, row.item_code]),
+						indicator: "green",
+					});
+				}
+			},
+		});
+	},
+});
 """.strip()
 
 
@@ -1910,6 +1955,24 @@ def setup_quotation_integration():
 					),
 				}
 			).insert(ignore_permissions=True)
+
+		# Lets a Commercial Officer fix a missing Item->Supplier link
+		# directly on the RFQ Items grid, row by row, instead of having to
+		# go fix every Item on its own form first before an RFQ with many
+		# items can even be built at all (2026-11-01 correction -- see
+		# _populate_rfq_suppliers_and_template's own docstring,
+		# inquiry.py). Pre-filled best-effort from the Item's own master
+		# data when it already has one (_best_effort_item_supplier,
+		# inquiry.py); picking/changing it (RFQ_CLIENT_SCRIPT_JS's own
+		# grid handler, calling attach_supplier_to_item) writes the
+		# Supplier back onto the Item AND adds it to this RFQ's own
+		# Suppliers table in the same action.
+		if frappe.db.exists("DocType", "Request for Quotation Item"):
+			_add_custom_field(
+				"Request for Quotation Item", "supplier", "Supplier", "Supplier", insert_after="item_code"
+			)
+			_set_property_setter("Request for Quotation Item", "supplier", "in_list_view", "1", "Check")
+			_set_property_setter("Request for Quotation Item", "supplier", "columns", "2", "Int")
 
 		_upsert_client_script(
 			"Inquiry - Commercial Pipeline (Request for Quotation)",
