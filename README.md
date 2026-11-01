@@ -949,6 +949,23 @@ colour, bold reserved for what needs it) rather than looking cramped. This
 was measured against the *un-letterheaded* page — see below for how the
 Letter Head now added on top of every print format changes that budget.
 
+**Inquiry has exactly two print formats, kept in sync by construction.**
+"Inquiry Standard" and "Inquiry Standard (With Comments)" are both built
+from one shared function, `_build_inquiry_print_html(with_comment_boxes)`
+(`install.py`) — identical in every respect except that the "With
+Comments" variant adds a blank, 1px-bordered, ~10-line-tall box
+(`.comment-box`, 42mm) directly under every item row, for someone to
+hand-write remarks against that specific item. `setup_print_format`
+calls it with `False` (the original, still the default, still fits one
+page); `setup_inquiry_comments_print_format` calls it with `True` (runs
+one page per item or so, by design — this format exists specifically to
+give writing room, not to be compact). **Never hand-write a second,
+separately-maintained HTML block for the comments variant** — any future
+change to the shared template (columns, colours, the header table, the
+items table) must go through `_build_inquiry_print_html` so both formats
+change together automatically; that's the whole reason it's structured
+this way rather than two independent `html` strings.
+
 ## Corporate Letter Head, default across every print format
 
 `setup_letter_head` turns the firm's own letterhead (source: `Latter

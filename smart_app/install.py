@@ -333,6 +333,7 @@ def setup():
 	run_step(setup_logistics_dashboard, "logistics dashboard")
 	run_step(setup_reports, "reports")
 	run_step(setup_print_format, "print format")
+	run_step(setup_inquiry_comments_print_format, "inquiry print format (with comments)")
 	run_step(setup_indent_print_format, "indent print format")
 	run_step(setup_letter_head, "corporate letterhead (default, all print formats)")
 	run_step(setup_workspace, "workspace")
@@ -2465,7 +2466,50 @@ PRINT_FORMAT_LETTERHEAD_FOOTER = """
 """
 
 
-def setup_print_format():
+# ---------------------------------------------------------------------------
+# Inquiry has exactly two print formats, "Inquiry Standard" and "Inquiry
+# Standard (With Comments)" -- both built from this ONE shared function,
+# identical in every way except the comment boxes the second one adds
+# under every item row. This is a deliberate, standing requirement (not
+# a one-off): whenever this template changes, BOTH formats must change
+# together, and routing both through _build_inquiry_print_html is what
+# actually enforces that structurally, rather than relying on remembering
+# to hand-edit two separate copies in step. Never hand-add a second,
+# separately-written HTML block for the comments variant -- extend this
+# function instead.
+# ---------------------------------------------------------------------------
+
+
+def _build_inquiry_print_html(with_comment_boxes=False):
+	if with_comment_boxes:
+		comment_box_css = r"""
+	/* Blank space under every item row for a user to hand-write remarks --
+	~10 lines tall (42mm), 1px bordered box, full item-table width.
+	page-break-inside: avoid so a box doesn't get visually split across a
+	page boundary if the comments table happens to run past one page --
+	confirmed in earlier testing that wkhtmltopdf's WebKit does honour
+	this on table rows. */
+	.inquiry-print .comment-box-row {
+		page-break-inside: avoid;
+	}
+	.inquiry-print .comment-box-row td {
+		border-top: none;
+		padding: 0 4px 4px;
+	}
+	.inquiry-print .comment-box {
+		border: 1px solid #94a3b8;
+		height: 42mm;
+	}
+"""
+		comment_box_row = r"""
+	<tr class="comment-box-row">
+		<td colspan="3"><div class="comment-box"></div></td>
+	</tr>
+"""
+	else:
+		comment_box_css = ""
+		comment_box_row = ""
+
 	html = (
 		r"""
 <div class="inquiry-print">
@@ -2612,7 +2656,11 @@ def setup_print_format():
 	and column-header rows share the table and would throw off the count. */
 	.inquiry-print .items-table .row-alt { background: #fafbfc; }
 
-	.inquiry-print .notes { font-size: 7.5px; color: #334155; }
+	.inquiry-print .notes {
+		font-size: 7.5px;
+		color: #334155;
+		page-break-inside: avoid;
+	}
 	.inquiry-print .notes .heading {
 		display: block;
 		font-size: 7.3px;
@@ -2622,6 +2670,9 @@ def setup_print_format():
 		color: #00a650;
 		margin-bottom: 2px;
 	}
+"""
+		+ comment_box_css
+		+ r"""
 </style>
 """
 		+ PRINT_FORMAT_LETTERHEAD_HEADER
@@ -2679,6 +2730,9 @@ positions 2/3 never hold more than "Mode of Payment" (15 chars). -->
 		<td>{{ row.item_name or row.item }}</td>
 		<td class="num">{{ row.qty }}</td>
 	</tr>
+"""
+		+ comment_box_row
+		+ r"""
 	{% endfor %}
 </table>
 
@@ -2695,11 +2749,15 @@ positions 2/3 never hold more than "Mode of Payment" (15 chars). -->
 """
 	).strip()
 
-	if frappe.db.exists("Print Format", "Inquiry Standard"):
-		pf = frappe.get_doc("Print Format", "Inquiry Standard")
+	return html
+
+
+def _upsert_inquiry_print_format(name, html):
+	if frappe.db.exists("Print Format", name):
+		pf = frappe.get_doc("Print Format", name)
 	else:
 		pf = frappe.new_doc("Print Format")
-		pf.name = "Inquiry Standard"
+		pf.name = name
 		pf.doc_type = "Inquiry"
 		pf.module = MODULE
 		pf.print_format_type = "Jinja"
@@ -2721,6 +2779,16 @@ positions 2/3 never hold more than "Mode of Payment" (15 chars). -->
 		pf.insert(ignore_permissions=True)
 	elif changed:
 		pf.save(ignore_permissions=True)
+
+
+def setup_print_format():
+	_upsert_inquiry_print_format("Inquiry Standard", _build_inquiry_print_html(with_comment_boxes=False))
+
+
+def setup_inquiry_comments_print_format():
+	_upsert_inquiry_print_format(
+		"Inquiry Standard (With Comments)", _build_inquiry_print_html(with_comment_boxes=True)
+	)
 
 
 # ---------------------------------------------------------------------------
