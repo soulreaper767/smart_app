@@ -350,6 +350,10 @@ def setup():
 	run_step(backfill_commercial_manager_inquiry_user_role, "backfill Inquiry User role for Commercial Manager")
 	run_step(backfill_commercial_status, "backfill blank/stuck commercial_status on existing Inquiries")
 	run_step(backfill_comparative_status, "backfill blank comparative_status on existing Comparative Statements")
+	run_step(
+		backfill_commission_invoice_indent_value,
+		"backfill blank indent_value on existing Commission Invoices (never set until 2026-11-13)",
+	)
 	run_step(backfill_commission_status, "backfill blank commission_status on existing Commission Invoices")
 	run_step(backfill_indent_status, "backfill blank/stuck indent_status on existing Indents")
 	run_step(backfill_party_price_lists, "backfill default Price Lists for existing Customers/Suppliers")
@@ -2515,7 +2519,32 @@ def setup_usd_trade_accounts():
 PRINT_FORMAT_LETTERHEAD_HEADER = """
 {% if letter_head and not no_letterhead %}
 <div id="header-html" class="hidden-pdf">
-<div class="letter-head">{{ letter_head }}</div>
+<div class="letter-head" id="smart-app-letterhead-banner">{{ letter_head }}</div>
+<script>
+(function () {
+	// First-page-only header (2026-11-13 correction: "use main headers
+	// on first page only, don't repeat") -- wkhtmltopdf appends its own
+	// `?page=N&frompage=...` etc. query string to this header document's
+	// URL on every page it renders it against; Frappe's own sibling
+	// subst() function (body onload="subst()", this exact
+	// pdf_header_footer.html wrapper) already depends on that same
+	// mechanism for "Page X of Y"-style substitution, so this isn't a
+	// new assumption about what wkhtmltopdf does -- confirmed directly
+	// against the real wkhtmltopdf 0.12.6 binary too, not just inferred.
+	// `visibility: hidden`, not `display: none` -- keeps this page's
+	// own margin-top reservation identical to page 1's, so later
+	// content never shifts depending on which page it lands on.
+	var params = {};
+	(window.location.search || "").substring(1).split("&").forEach(function (pair) {
+		var kv = pair.split("=");
+		if (kv[0]) { params[kv[0]] = kv[1]; }
+	});
+	if (params.page && params.page !== "1") {
+		var el = document.getElementById("smart-app-letterhead-banner");
+		if (el) { el.style.visibility = "hidden"; }
+	}
+})();
+</script>
 </div>
 {% endif %}
 """
@@ -3926,6 +3955,84 @@ def backfill_comparative_status():
 		where docstatus = 1 and (comparative_status is null or comparative_status = '')
 		"""
 	)
+
+
+def backfill_commission_invoice_indent_value():
+	"""Real bug, found 2026-11-13: Commission Invoice.indent_value is
+	`read_only` on the doctype (a Commercial Officer can never hand-type
+	it) but nothing ever actually SET it either -- every Commission
+	Invoice's indent_value has always been blank, and `calculate_
+	commission`'s own "Percentage of Indent Value" component type
+	computes `flt(self.indent_value) * flt(row.percentage) / 100`, which
+	is zero regardless of the percentage entered whenever indent_value is
+	blank. Fixed at the source in _build_commission_invoice_from_indent
+	(commission_invoice.py); this backfills every existing record's
+	indent_value from its own linked Indent's total_amount.
+
+	Deliberately only backfills the `indent_value` display field itself,
+	never recomputes/rewrites gross_commission, net_commission, or
+	components on an already-SUBMITTED Commission Invoice -- those numbers
+	may already be reflected in a real, already-posted Sales Invoice
+	(create_and_submit_sales_invoice), and silently rewriting a posted
+	invoice's own backing numbers after the fact is a books-integrity risk
+	outside what a migrate-time backfill should ever do (same reasoning
+	as every other "don't touch GL retroactively" call elsewhere in this
+	app). A DRAFT Commission Invoice is safe to fully recompute, since
+	nothing has posted yet, so this does that too.
+
+	Flags (print only, not an automatic fix) every already-SUBMITTED
+	Commission Invoice that has a "Percentage of Indent Value" component
+	recorded at zero amount -- the real, practical symptom of this bug --
+	so a human can decide whether a supplementary invoice is actually
+	owed. This script does not, and should not, decide that on its own."""
+	drafts = frappe.get_all(
+		"Commission Invoice",
+		filters={"docstatus": 0, "indent": ("is", "set")},
+		fields=["name", "indent"],
+	)
+	for row in drafts:
+		if frappe.db.get_value("Commission Invoice", row.name, "indent_value"):
+			continue
+		total_amount = frappe.db.get_value("Indent", row.indent, "total_amount")
+		if not total_amount:
+			continue
+		doc = frappe.get_doc("Commission Invoice", row.name)
+		doc.indent_value = total_amount
+		doc.save(ignore_permissions=True)
+
+	frappe.db.sql(
+		"""
+		update `tabCommission Invoice` ci
+		inner join `tabIndent` i on i.name = ci.indent
+		set ci.indent_value = i.total_amount
+		where ci.docstatus = 1
+			and (ci.indent_value is null or ci.indent_value = 0)
+			and i.total_amount is not null and i.total_amount != 0
+		"""
+	)
+
+	underbilled = frappe.db.sql(
+		"""
+		select distinct ci.name
+		from `tabCommission Invoice` ci
+		inner join `tabCommission Invoice Component` cic on cic.parent = ci.name
+		where ci.docstatus = 1
+			and cic.component_type = 'Percentage of Indent Value'
+			and flt(cic.percentage) > 0
+			and flt(cic.amount) = 0
+		""",
+		as_dict=True,
+	)
+	if underbilled:
+		names = ", ".join(row.name for row in underbilled)
+		print(
+			f"[smart_app] WARNING: {len(underbilled)} already-submitted Commission "
+			f"Invoice(s) have a 'Percentage of Indent Value' component recorded at "
+			f"zero despite a nonzero percentage -- almost certainly under-billed by "
+			f"this bug, and their already-posted Sales Invoice was NOT touched by "
+			f"this backfill. Review and raise a supplementary invoice if warranted: "
+			f"{names}"
+		)
 
 
 def backfill_commission_status():

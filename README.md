@@ -1052,7 +1052,8 @@ must follow:** two constants near the top of the "Print Format" section of
 PRINT_FORMAT_LETTERHEAD_HEADER = """
 {% if letter_head and not no_letterhead %}
 <div id="header-html" class="hidden-pdf">
-<div class="letter-head">{{ letter_head }}</div>
+<div class="letter-head" id="smart-app-letterhead-banner">{{ letter_head }}</div>
+<script>...first-page-only hide, see below...</script>
 </div>
 {% endif %}
 """
@@ -1066,7 +1067,7 @@ PRINT_FORMAT_LETTERHEAD_FOOTER = """
 """
 ```
 
-— copied **verbatim** from Frappe's own `add_header` macro
+— based **verbatim** on Frappe's own `add_header` macro
 (`templates/print_formats/standard_macros.html`) and `standard.html`'s own
 footer block, including the exact `id="header-html"`/`id="footer-html"` +
 `hidden-pdf`/`visible-pdf` + `letter-head`/`letter-head-footer` class
@@ -1074,6 +1075,27 @@ convention — that specific `id` is what
 `frappe.utils.pdf.prepare_header_footer` looks for to extract the content
 into a *repeating* wkhtmltopdf header/footer (one per page), not just an
 inline block that only shows on whichever page it happens to fall on.
+
+**The main letterhead banner shows on page 1 only, not every page**
+(2026-11-13 correction: "use main headers on first page only, don't
+repeat" — the footer, with the firm's contact/address details, keeps
+repeating on every page, deliberately unchanged). wkhtmltopdf has no
+built-in "first page only" header option, so `PRINT_FORMAT_LETTERHEAD_
+HEADER` carries a small inline `<script>` that reads its own page's
+`?page=N&frompage=...` query string — the exact same mechanism Frappe's
+own sibling `subst()` function (`templates/print_formats/
+pdf_header_footer.html`, which wraps whatever this renders into for the
+actual wkhtmltopdf `--header-html` call) already depends on for "Page X
+of Y"-style substitution — and sets `visibility: hidden` (not `display:
+none`, so the same margin-top space is still reserved on every page,
+and later content never shifts depending on which page it lands on) on
+the banner whenever `page != "1"`. Confirmed against the real
+wkhtmltopdf 0.12.6 binary, **including with `--disable-javascript` set**
+(exactly what `frappe.utils.pdf.get_pdf` always passes) — that flag does
+not block a header/footer's own JS, which is also exactly why Frappe's
+own "Page X of Y" footers already work in every real deployment despite
+it; this wasn't assumed, it was rendered and visually inspected page by
+page.
 
 Every custom print format's own `html = (...)` splices these in at two
 fixed points: `PRINT_FORMAT_LETTERHEAD_HEADER` right after its own
@@ -1139,6 +1161,26 @@ own trade value or the direct-sale pipeline's Sales Invoice above.
   Fetches `indent_value` (the trade's full value, kept only as the base for
   a percentage-of-value component, never itself billed), the Supplier
   (who owes the commission) and Buyer (reference only) from the Indent.
+  **Real bug, found and fixed 2026-11-13**: `indent_value` is `read_only`
+  on the doctype (so it's never hand-typed) but nothing ever actually set
+  it, on either path, since the doctype was first built — every
+  Commission Invoice's `indent_value` was blank, which made `calculate_
+  commission`'s own "Percentage of Indent Value" component compute to
+  zero regardless of the percentage entered, silently, for every
+  Commission Invoice that ever used it. `_build_commission_invoice_from_
+  indent` now sets `indent_value = indent.total_amount` directly;
+  `backfill_commission_invoice_indent_value` (`install.py`) backfills
+  every existing record's `indent_value` (and fully recomputes a still-
+  draft one, safe since nothing's posted yet) but deliberately does NOT
+  retroactively rewrite `gross_commission`/`net_commission`/the
+  components on an already-submitted one — those may already be
+  reflected in a real, already-posted Sales Invoice, and silently
+  rewriting a posted invoice's backing numbers is a books-integrity risk
+  this app never takes on its own. It instead prints a warning listing
+  any already-submitted Commission Invoice with a "Percentage of Indent
+  Value" component recorded at zero despite a nonzero percentage — the
+  practical fingerprint of this bug — for a human to review and decide
+  whether a supplementary invoice is actually owed.
 - **Billing a Supplier through Sales Invoice.** Core ERPNext's Sales
   Invoice always bills a *Customer*. `ensure_customer_for_supplier`
   (`utils.py`) auto-creates (once, reused after via the hidden

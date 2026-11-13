@@ -172,12 +172,27 @@ def _build_commission_invoice_from_indent(indent):
 	PO and Indent in US$" correction (2026-10-30) -- blindly inheriting
 	indent.currency here would make create_and_submit_sales_invoice's own
 	Sales Invoice hit the exact same InvalidCurrency this whole fix was
-	meant to resolve, just one hop further down the chain."""
+	meant to resolve, just one hop further down the chain.
+
+	indent_value = indent.total_amount -- real bug, found 2026-11-13: this
+	field is `read_only` on the doctype (so a Commercial Officer can never
+	hand-type it, by design) but nothing ever actually SET it either, on
+	either of the two paths that build a Commission Invoice from an Indent
+	(create_commission_invoice_from_indent / get_commission_invoice_data_
+	from_indent, both of which already call this shared builder) -- every
+	Commission Invoice's indent_value has always been blank. calculate_
+	commission's own "Percentage of Indent Value" component type
+	(`row.amount = flt(self.indent_value) * flt(row.percentage) / 100`)
+	has therefore always computed to zero for every Commission Invoice
+	that used that component type, regardless of the percentage entered --
+	the one actual revenue calculation this app exists for, silently
+	broken since the doctype was first built."""
 	from erpnext.accounts.party import get_party_account_currency
 
 	commission_invoice = frappe.new_doc("Commission Invoice")
 	commission_invoice.company = indent.company
 	commission_invoice.indent = indent.name
+	commission_invoice.indent_value = indent.total_amount
 	commission_invoice.billing_customer = ensure_customer_for_supplier(indent.supplier)
 	commission_invoice.currency = (
 		get_party_account_currency("Customer", commission_invoice.billing_customer, indent.company)
