@@ -3996,9 +3996,23 @@ def backfill_commission_invoice_indent_value():
 		total_amount = frappe.db.get_value("Indent", row.indent, "total_amount")
 		if not total_amount:
 			continue
-		doc = frappe.get_doc("Commission Invoice", row.name)
-		doc.indent_value = total_amount
-		doc.save(ignore_permissions=True)
+		# flags.ignore_mandatory + a per-record try/except -- confirmed
+		# live (2026-11-13) that a plain .save() here aborted this WHOLE
+		# step (caught by run_step, logged, printed as a generic warning)
+		# the moment any one draft Commission Invoice had some unrelated
+		# mandatory field still blank, exactly the normal state for an
+		# in-progress draft someone hasn't finished filling in yet -- a
+		# migration backfill correcting one field has no business failing
+		# site-wide over that, and must never let one bad record block
+		# every other one behind it in the loop either.
+		try:
+			doc = frappe.get_doc("Commission Invoice", row.name)
+			doc.indent_value = total_amount
+			doc.flags.ignore_mandatory = True
+			doc.save(ignore_permissions=True)
+		except Exception:
+			frappe.db.rollback()
+			frappe.log_error(title=f"backfill_commission_invoice_indent_value: {row.name}")
 
 	frappe.db.sql(
 		"""
