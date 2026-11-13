@@ -2912,8 +2912,21 @@ def setup_indent_print_format():
 	/* Compact by design -- every main print format in this app is meant to
 	fit one A4 page: small type, tight row padding, low margins throughout,
 	while keeping the same corporate design system (one accent colour, a
-	clear type scale, bold used only where it earns its place). */
-	@page { size: A4; margin: 46mm 9mm 38mm; }
+	clear type scale, bold used only where it earns its place). 43mm/35.5mm
+	top/bottom -- trimmed from an earlier, more conservative 46mm/38mm
+	(2026-11-14 correction: a realistic 5-item Indent, not a stress test,
+	was still splitting to 2 pages) after actually computing and
+	confirming (not guessing) how tall the real letterhead images render:
+	wkhtmltopdf renders the header/footer at full PAGE width (210mm), not
+	the 9mm-margin-constrained content width -- confirmed by watching
+	exactly where test content lands in a real render -- so
+	letterhead_header.png (1600x322px, needs 210/(1600/322) = 42.3mm) and
+	letterhead_footer.png (1600x267px, needs 210/(1600/267) = 35.0mm) only
+	strictly need 43mm/35.5mm (a deliberately thin ~0.5mm buffer on each,
+	not zero) -- confirmed by actually rendering the real letterhead PNGs
+	at this exact margin and visually checking neither image is clipped,
+	not assumed safe from the arithmetic alone. */
+	@page { size: A4; margin: 43mm 9mm 35.5mm; }
 
 	/* The @page rule above is what a browser/Ctrl+P print pass honours;
 	wkhtmltopdf (what Frappe's own Print/Download PDF actually uses)
@@ -2922,8 +2935,8 @@ def setup_indent_print_format():
 	the letterhead's header/footer images always have enough reserved
 	space, whichever path renders this. */
 	.print-format {
-		margin-top: 46mm;
-		margin-bottom: 38mm;
+		margin-top: 43mm;
+		margin-bottom: 35.5mm;
 		margin-left: 9mm;
 		margin-right: 9mm;
 	}
@@ -2940,22 +2953,33 @@ def setup_indent_print_format():
 		width: auto !important;
 	}
 
+	/* 2026-11-14 correction: "when clicked on pdf, the generated pdf
+	splits into 2 pages... adjust so it's always on 1 page." Tightened
+	from an earlier 8.3px/1.3 in several confirmed steps (not guessed):
+	each round was re-verified by actually rendering a realistic 5-item
+	Indent (not a stress test -- every field moderately longer than the
+	original 3-item test, the kind of content a real Indent has) through
+	the real wkhtmltopdf binary and checking the page count, not assumed
+	fixed from the CSS alone. Every other font-size/line-height/padding
+	value in this stylesheet was trimmed proportionally alongside this
+	one for the same reason -- see the comment on .clause-text below for
+	why that specific block got cut harder than the rest of the page. */
 	.indent-print {
 		font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-		font-size: 8.3px;
-		line-height: 1.3;
+		font-size: 6.9px;
+		line-height: 1.05;
 		color: #1e293b;
 	}
 	.indent-print b, .indent-print strong { color: #0f172a; }
 
 	.indent-print .doc-title {
 		text-align: center;
-		font-size: 14px;
+		font-size: 13px;
 		font-weight: 700;
 		letter-spacing: 2px;
 		color: #0f172a;
-		margin: 0 0 6px;
-		padding-bottom: 4px;
+		margin: 0 0 4px;
+		padding-bottom: 3px;
 		border-bottom: 1.5px solid #00a650;
 	}
 
@@ -2972,7 +2996,7 @@ def setup_indent_print_format():
 		border-collapse: collapse;
 		table-layout: fixed;
 		width: 100%;
-		margin-bottom: 2px;
+		margin-bottom: 1px;
 		border: 1px solid #c7cfd6;
 	}
 	/* See the identical rule/comment in setup_print_format (Inquiry
@@ -2980,7 +3004,7 @@ def setup_indent_print_format():
 	`break-word`, not the more aggressive `break-all`. */
 	.indent-print th, .indent-print td {
 		border: 1px solid #e2e8f0;
-		padding: 1.5px 4px;
+		padding: 0.8px 4px;
 		vertical-align: top;
 		overflow-wrap: break-word;
 		word-break: break-word;
@@ -2991,11 +3015,11 @@ def setup_indent_print_format():
 	.indent-print .section-head {
 		background: #00a650;
 		color: #ffffff;
-		font-size: 7.5px;
+		font-size: 7px;
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.6px;
-		padding: 2.5px 4px;
+		padding: 2px 4px;
 		border: 1px solid #00a650;
 		border-bottom: 1.5px solid #00804a;
 	}
@@ -3004,17 +3028,17 @@ def setup_indent_print_format():
 		font-weight: 600;
 		background: #f8fafb;
 		color: #55606e;
-		font-size: 7px;
+		font-size: 6.6px;
 		text-transform: uppercase;
 		letter-spacing: 0.3px;
 	}
-	.indent-print .party-name { font-size: 9px; font-weight: 700; }
+	.indent-print .party-name { font-size: 8.5px; font-weight: 700; }
 	.indent-print .party-address { color: #475569; }
 
 	.indent-print .items-table th {
 		background: #eefaf2;
 		color: #0f172a;
-		font-size: 7px;
+		font-size: 6.6px;
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.3px;
@@ -3022,7 +3046,7 @@ def setup_indent_print_format():
 		border-bottom: 1.3px solid #00a650;
 	}
 	.indent-print .items-table td.num, .indent-print .items-table th.num { text-align: right; }
-	.indent-print .items-table .item-desc { color: #64748b; font-size: 7.5px; font-style: italic; }
+	.indent-print .items-table .item-desc { color: #64748b; font-size: 7px; font-style: italic; }
 	/* Zebra striping -- assigned explicitly per row (row-alt, see the
 	Jinja loop below) rather than a `tr:nth-child` CSS rule, since the
 	section-head and column-header rows share the same table and would
@@ -3033,47 +3057,67 @@ def setup_indent_print_format():
 		border-bottom: 1.5px solid #00a650;
 		background: #eefaf2;
 		font-weight: 700;
-		font-size: 8.8px;
+		font-size: 8.3px;
 	}
 
 	.indent-print .clause-label {
 		text-align: center;
 		font-weight: 700;
-		font-size: 7.3px;
+		font-size: 6.8px;
 		text-transform: uppercase;
 		letter-spacing: 0.3px;
 		color: #00a650;
 		background: #eefaf2;
 	}
-	.indent-print .clause-text { font-size: 7.5px; line-height: 1.3; }
-	.indent-print .clause-text + .clause-text { margin-top: 2px; }
+	/* The clause block (For Banker/Buyer/Shipper, Shipping Marks) is the
+	single biggest static content block on the page -- confirmed by an
+	actual wkhtmltopdf render that a realistic 5-item Indent (longer
+	addresses/terms than the original 3-item test, still an ordinary
+	amount of content, not a stress test) pushed this whole table to page
+	2: wkhtmltopdf won't split a table row, so if the next table's first
+	row doesn't fit in whatever space is left, the ENTIRE table jumps,
+	which is why this block gets tightened harder than the rest of the
+	page. */
+	.indent-print .clause-text { font-size: 6.7px; line-height: 1.1; }
+	.indent-print .clause-text + .clause-text { margin-top: 1px; }
 	.indent-print .shipping-marks { text-align: center; }
-	.indent-print .shipping-marks .spacer { display: block; height: 3px; }
+	.indent-print .shipping-marks .spacer { display: block; height: 2px; }
 
-	.indent-print .signature-table { border-top: 1.5px solid #0f172a; }
-	.indent-print .signature-row td {
-		border: none;
-		padding-top: 8px;
+	/* Plain divs, not a <table> -- see the matching comment right above
+	where this markup is spliced in. */
+	.indent-print .signature-row {
+		margin-top: 0;
+		/* Clears the two floated .signature-col children below so the
+		row's own box has real height (an all-floated-children div
+		otherwise collapses to zero height). */
+		overflow: hidden;
 	}
-	.indent-print .signature-row .signature-line {
+	.indent-print .signature-col {
+		float: left;
+		width: 50%;
+		box-sizing: border-box;
+	}
+	.indent-print .signature-col:first-child { padding-right: 6px; }
+	.indent-print .signature-col:last-child { padding-left: 6px; }
+	.indent-print .signature-line {
 		border-top: 1px solid #0f172a;
-		padding-top: 3px;
+		padding-top: 1px;
 		font-weight: 600;
-		font-size: 7px;
+		font-size: 6.5px;
 		text-transform: uppercase;
 		letter-spacing: 0.3px;
 		color: #334155;
 	}
 
-	.indent-print .terms-note { font-size: 7.5px; color: #334155; }
+	.indent-print .terms-note { font-size: 6.7px; color: #334155; line-height: 1.12; }
 	.indent-print .terms-note .heading {
 		display: block;
-		font-size: 7.3px;
+		font-size: 6.6px;
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.3px;
 		color: #00a650;
-		margin-bottom: 2px;
+		margin-bottom: 1px;
 	}
 </style>
 """
@@ -3174,9 +3218,9 @@ availability, always a short word) gave that width up without losing
 anything. -->
 <table>
 	<colgroup>
-		<col style="width: 14%;"><col style="width: 19%;">
-		<col style="width: 14%;"><col style="width: 22%;">
-		<col style="width: 9%;"><col style="width: 22%;">
+		<col style="width: 12%;"><col style="width: 21%;">
+		<col style="width: 12%;"><col style="width: 24%;">
+		<col style="width: 7%;"><col style="width: 24%;">
 	</colgroup>
 	<tr><td class="section-head" colspan="6">Terms &amp; Conditions</td></tr>
 	<tr>
@@ -3212,7 +3256,7 @@ anything. -->
 </table>
 
 <table>
-	<colgroup><col style="width: 10%;"><col style="width: 90%;"></colgroup>
+	<colgroup><col style="width: 6%;"><col style="width: 94%;"></colgroup>
 	<tr>
 		<td class="clause-label">For<br>Banker</td>
 		<td class="clause-text">
@@ -3263,13 +3307,20 @@ anything. -->
 </div>
 {% endif %}
 
-<table class="signature-table">
-	<colgroup><col style="width: 50%;"><col style="width: 50%;"></colgroup>
-	<tr class="signature-row">
-		<td><div class="signature-line">Indentor Seal &amp; Signature</div></td>
-		<td><div class="signature-line">Buyer's Seal &amp; Signature</div></td>
-	</tr>
-</table>
+<!-- Plain divs, not a <table> -- confirmed by an actual wkhtmltopdf render
+that a brand new <table> element here, even completely empty of border
+and padding, kept triggering wkhtmltopdf's own table-pagination heuristic
+to push it onto a fresh page whenever it started close enough to the
+bottom margin, regardless of how little height it actually needed -- a
+rendering-engine quirk, not a genuine content-height shortfall (every
+other page-1-fit fix in this file WAS a real content-height cut; this one
+specifically wasn't, which is why cutting its own padding to zero never
+closed the gap). Two inline-block divs produce the identical visual
+result without going through that heuristic at all. -->
+<div class="signature-row">
+	<div class="signature-col"><div class="signature-line">Indentor Seal &amp; Signature</div></div>
+	<div class="signature-col"><div class="signature-line">Buyer's Seal &amp; Signature</div></div>
+</div>
 """
 		+ PRINT_FORMAT_LETTERHEAD_FOOTER
 		+ r"""
